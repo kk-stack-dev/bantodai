@@ -1,0 +1,15 @@
+{
+  "_comment": "config.json は無くても動きます。変えたい項目だけ書いてください (書いた項目は既定値を丸ごと置き換えます)",
+
+  "local_name": "Mac mini",
+
+  "links": [
+    { "name": "Open WebUI", "url": "http://{host}:3000",  "health": "http://127.0.0.1:3000/health",      "icon": "openwebui" },
+    { "name": "Ollama API", "url": "http://{host}:11434", "health": "http://127.0.0.1:11434/api/version", "icon": "ollama" }
+  ],
+
+  "_devices_comment": "自動検出が届かないデバイスだけ、ホスト名 (.local) で足せます",
+  "devices": [
+    { "id": "kk-mbp", "name": "MacBook Pro", "agent": "http://kk-mbp.local:8765" }
+  ]
+}

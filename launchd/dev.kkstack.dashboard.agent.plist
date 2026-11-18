@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- MacBook など、ハブ以外の Mac で banto 収集エージェントを常駐させる。__DIR__ を置き換えて使う -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>dev.kkstack.dashboard.agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>__DIR__/agent.py</string>
+    <string>--port</string><string>8765</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/dev-dashboard.agent.log</string>
+  <key>StandardErrorPath</key><string>/tmp/dev-dashboard.agent.log</string>
+</dict>
+</plist>

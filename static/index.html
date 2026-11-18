@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="番頭台">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/icon-180.png">
+<meta name="theme-color" content="#0a0d12">
+<title>番頭台 — Dev Console</title>
+<style>
+:root{
+  --bg:#0a0d12; --panel:#11161d; --panel2:#161c25; --line:#222b37; --line2:#2c3746;
+  --tx:#e6ebf2; --tx2:#9aa6b6; --tx3:#64707f;
+  --amber:#f5a524; --amber-d:#3a2a0c;
+  --run:#38bdf8; --wait:#fb923c; --idle:#7c8796; --done:#34d399; --fail:#f87171; --review:#c084fc;
+  --crit:#f43f5e; --high:#fb923c; --med:#facc15; --low:#64748b;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", "Segoe UI", sans-serif;
+  --r:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--tx);font:13px/1.45 var(--sans);-webkit-font-smoothing:antialiased}
+body{min-height:100vh;background:
+  radial-gradient(1200px 500px at 10% -10%, #1a2230 0%, transparent 60%),
+  radial-gradient(900px 400px at 110% 0%, #231a0b 0%, transparent 55%), var(--bg)}
+a{color:inherit;text-decoration:none}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.muted{color:var(--tx2)} .dim{color:var(--tx3)}
+
+/* ---------- header ---------- */
+header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:18px;padding:12px 20px;
+  background:rgba(10,13,18,.82);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.brand .seal{width:30px;height:30px;border-radius:7px;display:grid;place-items:center;
+  background:linear-gradient(145deg,#f7b13c,#c97a06);color:#1b1205;font-weight:800;font-size:15px;
+  box-shadow:0 0 0 1px #ffcf7a55 inset,0 6px 18px #f5a52433}
+.brand b{font-size:15px;letter-spacing:.04em}
+.brand small{display:block;color:var(--tx3);font:10px var(--mono);letter-spacing:.14em}
+.kpis{display:flex;gap:8px;flex:1;justify-content:center;flex-wrap:wrap}
+.kpi{display:flex;align-items:baseline;gap:7px;padding:5px 12px;border:1px solid var(--line);border-radius:999px;background:var(--panel)}
+.kpi .n{font:600 16px var(--mono)}
+.kpi .l{color:var(--tx2);font-size:11px}
+.kpi.hot{border-color:#fb923c66;background:#2a1708}
+.kpi.hot .n{color:var(--wait)}
+.clock{text-align:right}
+.clock .t{font:600 18px var(--mono);letter-spacing:.04em}
+.clock .u{font:10px var(--mono);color:var(--tx3)}
+.badge-demo{font:600 10px var(--mono);color:#1b1205;background:var(--amber);padding:2px 6px;border-radius:4px;margin-left:6px}
+.stale .u{color:var(--fail)}
+
+/* ---------- layout ---------- */
+main{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;padding:16px 20px 28px;max-width:1680px;margin:0 auto}
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+.panel{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.ph{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.ph h2{margin:0;font-size:11px;font-weight:700;letter-spacing:.14em;color:var(--tx2);text-transform:uppercase}
+.ph .sp{flex:1}
+.pb{padding:12px 14px}
+@media (max-width:1100px){ main{grid-template-columns:1fr} }
+@media (max-width:640px){
+  header{display:grid;grid-template-columns:1fr auto;gap:10px;padding:10px 12px}
+  .kpis{grid-column:1 / -1;grid-row:2;justify-content:flex-start;gap:6px}
+  .kpi{padding:3px 9px} .kpi .n{font-size:14px} .kpi .l{font-size:10px}
+  main{padding:12px;gap:12px}
+  .attn-row{grid-template-columns:auto minmax(0,1fr) auto;row-gap:4px}
+  .attn-row .where{grid-column:2;grid-row:1}
+  .attn-row .what{grid-column:1 / -1;grid-row:2}
+  .cards{grid-template-columns:1fr}
+}
+
+/* ---------- status dots ---------- */
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;background:var(--idle)}
+.dot.on{background:var(--done);box-shadow:0 0 0 3px #34d39922}
+.dot.off{background:var(--fail);box-shadow:0 0 0 3px #f8717122}
+.dot.warn{background:var(--wait);box-shadow:0 0 0 3px #fb923c22}
+.dot.pulse{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+
+/* ---------- attention ---------- */
+.attn{display:flex;flex-direction:column}
+.attn-row{display:grid;grid-template-columns:62px 210px minmax(0,1fr) auto;gap:10px;align-items:center;
+  padding:9px 14px;border-bottom:1px solid var(--line)}
+.attn-row:last-child{border-bottom:0}
+.attn-row .k{font:700 10px var(--mono);padding:2px 6px;border-radius:4px;letter-spacing:.06em}
+.k.wait{background:#3a1e08;color:var(--wait)} .k.rev{background:#2a1740;color:var(--review)} .k.unseen{background:#0c2a3a;color:var(--run)}
+.attn-row .where{font:11px var(--mono);color:var(--tx3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.attn-row .k{text-align:center}
+.attn-row .what{min-width:0}
+.attn-row .what b{font-weight:600}
+.attn-row .what .q{display:block;color:var(--tx2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.attn-empty{padding:16px 14px;color:var(--tx3);display:flex;gap:10px;align-items:center}
+
+/* ---------- banto ---------- */
+.proj{border-top:1px solid var(--line)}
+.proj:first-child{border-top:0}
+.proj-h{display:flex;align-items:center;gap:10px;padding:10px 14px;flex-wrap:wrap}
+.chip{font:600 10px var(--mono);padding:2px 7px;border-radius:4px;border:1px solid var(--line2);color:var(--tx2);letter-spacing:.04em;white-space:nowrap}
+.chip.dev{color:var(--amber);border-color:#f5a52444;background:var(--amber-d)}
+.proj-h .name{font-weight:700;font-size:14px}
+.proj-h .meta{margin-left:auto;font:11px var(--mono);color:var(--tx3);display:flex;gap:10px;align-items:center}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;padding:0 14px 12px}
+.card{position:relative;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 11px 9px 13px;min-width:0}
+.card::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;border-radius:0 3px 3px 0;background:var(--pc,var(--low))}
+.card.review{border-color:#c084fc66;box-shadow:0 0 0 1px #c084fc22 inset}
+.card .top{display:flex;gap:6px;align-items:center;font:700 10px var(--mono);letter-spacing:.06em}
+.card .prio{color:var(--pc)}
+.card .genre{color:var(--tx3)}
+.card .id{margin-left:auto;color:var(--tx3);font-weight:500}
+.card .title{font-weight:600;margin:4px 0 2px;line-height:1.35;word-break:break-word}
+.card .cmt{color:var(--tx2);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prog{display:flex;align-items:center;gap:8px;margin-top:6px;font:11px var(--mono);color:var(--tx2)}
+.bar{flex:1;height:4px;background:var(--line);border-radius:4px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--run);border-radius:4px}
+.sessions{display:flex;flex-direction:column;gap:3px;margin-top:7px}
+.sess{display:flex;align-items:center;gap:7px;font-size:12px;min-width:0}
+.sess .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1}
+.sess .ag{font:10px var(--mono);color:var(--tx3);white-space:nowrap}
+.st{font:700 9.5px var(--mono);padding:1px 5px;border-radius:3px;letter-spacing:.05em;white-space:nowrap}
+.st.running{background:#0b2737;color:var(--run)} .st.waiting{background:#3a1e08;color:var(--wait)}
+.st.idle{background:#1a2029;color:var(--idle)} .st.done{background:#0b2a20;color:var(--done)} .st.failed{background:#33121a;color:var(--fail)}
+.flags{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+.flag{font:600 10px var(--mono);padding:1px 6px;border-radius:3px}
+.flag.rev{background:#2a1740;color:var(--review)} .flag.ok{background:#0b2a20;color:var(--done)} .flag.ng{background:#33121a;color:var(--fail)}
+.lanes{display:flex;gap:6px 14px;flex-wrap:wrap;padding:0 14px 12px;font-size:12px;color:var(--tx2)}
+.lane{display:flex;gap:6px;align-items:baseline;min-width:0;max-width:100%}
+.lane b{font:600 11px var(--mono);color:var(--tx3);white-space:nowrap}
+.lane span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.devdown{padding:10px 14px;color:var(--tx3);font-size:12px;display:flex;gap:8px;align-items:center;border-top:1px solid var(--line)}
+
+/* ---------- launch ---------- */
+.launch{display:grid;grid-template-columns:repeat(auto-fill,minmax(98px,1fr));gap:10px}
+.tile{position:relative;display:flex;flex-direction:column;align-items:center;gap:7px;padding:14px 8px 10px;border:1px solid var(--line);
+  border-radius:10px;background:var(--bg);transition:.15s;text-align:center}
+.tile:hover{border-color:var(--amber);transform:translateY(-1px)}
+.tile .ic{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;background:#1b2330;overflow:hidden}
+.tile .ic img{width:28px;height:28px;object-fit:contain}
+.tile .nm{font-size:12px;font-weight:600}
+.tile .lt{font:10px var(--mono);color:var(--tx3)}
+.tile .dot{position:absolute;top:8px;right:8px}
+
+/* ---------- machines ---------- */
+.mach-h{display:flex;align-items:center;gap:10px}
+.mach-h .big{font-size:15px;font-weight:700}
+.mach-h .sub{font:11px var(--mono);color:var(--tx3)}
+.power{display:flex;align-items:center;gap:14px;margin-top:12px}
+.pstate{flex:1;font:600 12px var(--mono);letter-spacing:.06em}
+.pstate .s{font-size:20px;display:block;letter-spacing:.02em}
+.btn{appearance:none;border:1px solid var(--line2);background:var(--panel2);color:var(--tx);font:600 12px var(--sans);
+  padding:9px 14px;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:8px;white-space:nowrap}
+.btn:hover:not(:disabled){border-color:var(--amber);color:var(--amber)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.arm{background:var(--amber);color:#1b1205;border-color:var(--amber)}
+.gauges{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}
+.gauge{text-align:center}
+.gauge svg{width:100%;max-width:74px;height:auto;display:block;margin:0 auto}
+.gauge .gl{font:600 10px var(--mono);color:var(--tx3);letter-spacing:.08em;margin-top:2px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin-top:12px;font-size:12px}
+.kv dt{color:var(--tx3);font:11px var(--mono)} .kv dd{margin:0;text-align:right;font-family:var(--mono)}
+.hbar{margin-top:10px}
+.hbar .lbl{display:flex;justify-content:space-between;font:11px var(--mono);color:var(--tx2);margin-bottom:4px}
+.hbar .bar{height:6px}
+.hbar .bar i{background:linear-gradient(90deg,#f5a524,#fb923c)}
+
+/* ---------- ollama ---------- */
+.model{padding:9px 0;border-top:1px solid var(--line)}
+.model:first-child{border-top:0;padding-top:0}
+.model .mn{display:flex;align-items:center;gap:8px}
+.model .mn b{font:600 13px var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.model .mn .ttl{margin-left:auto;font:11px var(--mono);color:var(--tx3);white-space:nowrap}
+.model .tags{display:flex;gap:5px;margin-top:5px;flex-wrap:wrap}
+.model .bar{margin-top:6px}
+.model .bar i{background:linear-gradient(90deg,#a78bfa,#38bdf8)}
+.inst{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px}
+.inst .chip{font-weight:500}
+.inst .chip.loaded{color:var(--run);border-color:#38bdf855}
+.empty{color:var(--tx3);font-size:12px}
+
+.tabbar{display:none}
+@media (max-width:640px){
+  body{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
+  header{padding-top:calc(10px + env(safe-area-inset-top));padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right))}
+  .clock .t{font-size:16px}
+  .kpis{overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .kpis::-webkit-scrollbar{display:none}
+  .kpi{flex:none}
+  main{display:block}
+  .col{display:contents}
+  main > .col > .panel{margin-bottom:12px}
+  body[data-tab] main .panel{display:none}
+  body[data-tab="attn"] main .panel[data-tab~="attn"],
+  body[data-tab="board"] main .panel[data-tab~="board"],
+  body[data-tab="machines"] main .panel[data-tab~="machines"],
+  body[data-tab="llm"] main .panel[data-tab~="llm"]{display:block}
+  footer{display:none}
+  .tabbar{display:grid;grid-template-columns:repeat(4,1fr);position:fixed;left:0;right:0;bottom:0;z-index:10;
+    padding:6px 6px calc(6px + env(safe-area-inset-bottom));background:rgba(12,16,22,.94);backdrop-filter:blur(12px);border-top:1px solid var(--line)}
+  .tabbar button{position:relative;appearance:none;background:none;border:0;color:var(--tx3);display:flex;flex-direction:column;align-items:center;gap:3px;
+    padding:6px 0;min-height:48px;font:600 10.5px var(--sans);border-radius:10px;-webkit-tap-highlight-color:transparent}
+  .tabbar button.on{color:var(--amber);background:#1a1408}
+  .tabbar svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+  .tb-badge{position:absolute;top:2px;left:calc(50% + 6px);min-width:17px;height:17px;padding:0 5px;border-radius:9px;font:700 10px/17px var(--mono);font-style:normal;
+    background:var(--wait);color:#1b1205;display:none}
+  .tb-badge.run{background:var(--run)} .tb-badge.off{background:var(--fail);color:#fff}
+  .tb-badge.show{display:block}
+  .btn{min-height:44px;padding:10px 16px}
+  .tile{min-height:96px}
+  .attn-row{padding:12px 14px}
+  .lanes{flex-direction:column}
+  .lane span{white-space:normal}
+  .gauge svg{max-width:68px}
+}
+footer{max-width:1680px;margin:0 auto;padding:0 20px 24px;display:flex;gap:14px;flex-wrap:wrap;color:var(--tx3);font:11px var(--mono)}
+footer .d{display:flex;align-items:center;gap:6px}
+@media (max-width:640px){ footer{display:none} }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="seal">番</div>
+    <div><b>番頭台</b><small>DEV CONSOLE · LAN</small></div>
+  </div>
+  <div class="kpis" id="kpis"></div>
+  <div class="clock" id="clock"><div class="t mono">--:--:--</div><div class="u">接続中…</div></div>
+</header>
+
+<main>
+  <div class="col">
+    <section class="panel" data-tab="attn">
+      <div class="ph"><span class="dot warn pulse" id="attnDot"></span><h2>Attention — 人の番</h2><span class="sp"></span><span class="dim mono" id="attnCount"></span></div>
+      <div class="attn" id="attn"></div>
+    </section>
+    <section class="panel" data-tab="board">
+      <div class="ph"><h2>banto — 全デバイスのボード</h2><span class="sp"></span><span class="dim mono" style="font-size:11px">読み取り専用</span></div>
+      <div id="banto"></div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="panel" data-tab="attn machines">
+      <div class="ph"><h2>Launch</h2></div>
+      <div class="pb"><div class="launch" id="links"></div></div>
+    </section>
+    <section class="panel" id="gamingPanel" data-tab="machines">
+      <div class="ph"><h2>Gaming PC</h2><span class="sp"></span><span class="dim mono" id="gHost"></span></div>
+      <div class="pb" id="gaming"></div>
+    </section>
+    <section class="panel" data-tab="machines">
+      <div class="ph"><h2>Mac mini</h2><span class="sp"></span><span class="dim mono" id="macUp"></span></div>
+      <div class="pb" id="mac"></div>
+    </section>
+    <section class="panel" data-tab="llm">
+      <div class="ph"><h2>Local LLM — Ollama</h2><span class="sp"></span><span class="dim mono" id="ollVer"></span></div>
+      <div class="pb" id="ollama"></div>
+    </section>
+  </div>
+</main>
+<footer id="foot"></footer>
+<nav class="tabbar" id="tabbar">
+  <button data-go="attn"><svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0-6 6v4l-2 3h16l-2-3V9a6 6 0 0 0-6-6zM10 19a2 2 0 0 0 4 0"/></svg><span>人の番</span><i class="tb-badge" id="tbAttn"></i></button>
+  <button data-go="board"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="10" y="4" width="5" height="11" rx="1.5"/><rect x="17" y="4" width="4" height="7" rx="1.5"/></svg><span>ボード</span><i class="tb-badge run" id="tbBoard"></i></button>
+  <button data-go="machines"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg><span>マシン</span><i class="tb-badge off" id="tbMach"></i></button>
+  <button data-go="llm"><svg viewBox="0 0 24 24"><rect x="5" y="7" width="14" height="13" rx="6"/><path d="M8 7V4M16 7V4"/><circle cx="10" cy="13" r=".6"/><circle cx="14" cy="13" r=".6"/></svg><span>LLM</span><i class="tb-badge run" id="tbLlm"></i></button>
+</nav>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const GB = 1024 ** 3;
+const fmtGB = (b) => b == null ? "—" : (b / GB >= 100 ? (b / GB).toFixed(0) : (b / GB).toFixed(1)) + " GB";
+const fmtDur = (s) => {
+  if (s == null) return "—"; s = Math.max(0, s);
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+};
+const ago = (t) => t ? fmtDur(Date.now() / 1000 - t) + "前" : "";
+const PRIO = { critical: ["CRIT", "--crit"], high: ["HIGH", "--high"], medium: ["MED", "--med"], low: ["LOW", "--low"] };
+const PR_RANK = { critical: 0, high: 1, medium: 2, low: 3 };
+const GENRE = { task: "TASK", review: "REVIEW", spike: "SPIKE" };
+const LANE = { active: "着手中", backlog: "未着手", hold: "保留", done: "完了" };
+const ST = { running: "RUN", waiting: "WAIT", idle: "IDLE", done: "DONE", failed: "FAIL" };
+
+let state = null, lastOk = 0;
+
+// ---------- gauge ----------
+function gauge(val, label, color) {
+  const v = val == null ? null : Math.max(0, Math.min(100, val));
+  const r = 30, c = Math.PI * r; // 半円
+  const off = v == null ? c : c * (1 - v / 100);
+  const col = v == null ? "var(--line2)" : v > 85 ? "var(--fail)" : v > 65 ? "var(--wait)" : color;
+  return `<div class="gauge"><svg viewBox="0 0 74 46">
+    <path d="M7 40 A30 30 0 0 1 67 40" fill="none" stroke="var(--line)" stroke-width="7" stroke-linecap="round"/>
+    <path d="M7 40 A30 30 0 0 1 67 40" fill="none" stroke="${col}" stroke-width="7" stroke-linecap="round"
+      stroke-dasharray="${c}" stroke-dashoffset="${off}" style="transition:stroke-dashoffset .6s"/>
+    <text x="37" y="39" text-anchor="middle" fill="var(--tx)" font-family="ui-monospace,Menlo,monospace" font-size="14" font-weight="600">${v == null ? "—" : Math.round(v)}</text>
+  </svg><div class="gl">${label}</div></div>`;
+}
+
+// ---------- attention + kpis ----------
+function collect(st) {
+  const items = [], k = { waiting: 0, running: 0, review: 0, unseen: 0, active: 0 };
+  for (const d of st.devices || []) {
+    const projs = d.snapshot?.banto?.projects || [];
+    for (const p of projs) for (const t of p.tasks) {
+      if (t.lane === "active") k.active++;
+      if (t.review) { k.review++; items.push({ kind: "rev", d, p, t, s: null, rank: 1 }); }
+      for (const s of t.sessions) {
+        if (s.status === "running") k.running++;
+        if (s.status === "waiting") { k.waiting++; items.push({ kind: "wait", d, p, t, s, rank: 0 }); }
+        else if (s.unseen) { k.unseen++; items.push({ kind: "unseen", d, p, t, s, rank: 2 }); }
+      }
+    }
+  }
+  items.sort((a, b) => a.rank - b.rank || PR_RANK[a.t.priority] - PR_RANK[b.t.priority]);
+  return { items, k };
+}
+
+function renderKpis(k) {
+  const kp = [["waiting", "承認待ち", k.waiting > 0], ["review", "確認待ち", k.review > 0], ["running", "実行中"], ["unseen", "未読"], ["active", "着手中タスク"]];
+  $("kpis").innerHTML = kp.map(([key, l, hot]) => `<div class="kpi ${hot ? "hot" : ""}"><span class="n">${k[key]}</span><span class="l">${l}</span></div>`).join("");
+}
+
+function renderAttention(items) {
+  $("attnCount").textContent = items.length ? `${items.length} 件` : "";
+  $("attnDot").className = "dot " + (items.some(i => i.kind === "wait") ? "warn pulse" : items.length ? "warn" : "on");
+  if (!items.length) { $("attn").innerHTML = `<div class="attn-empty"><span class="dot on"></span>人の判断を待っているものはありません</div>`; return; }
+  $("attn").innerHTML = items.slice(0, 8).map(i => {
+    const label = { wait: "承認待ち", rev: "確認待ち", unseen: "未読" }[i.kind];
+    const who = i.s ? `${esc(i.s.name)} <span class="dim">(${esc(i.s.agent)})</span>` : "";
+    const q = i.kind === "wait" ? (i.s.request || "許可を求めています") : i.kind === "rev" ? (i.t.last_report?.text || i.t.comment || "レビュー依頼・質問あり") : "走り終えました";
+    return `<div class="attn-row">
+      <span class="k ${i.kind}">${label}</span>
+      <span class="where">${esc(i.d.name)} · ${esc(i.p.name)}</span>
+      <span class="what"><b>#${esc(i.t.id)} ${esc(i.t.title)}</b> ${who}<span class="q">${esc(q)}</span></span>
+      <span class="chip" style="color:var(${PRIO[i.t.priority]?.[1] || "--low"})">${PRIO[i.t.priority]?.[0] || ""}</span>
+    </div>`;
+  }).join("") + (items.length > 8 ? `<div class="attn-empty">ほか ${items.length - 8} 件</div>` : "");
+}
+
+// ---------- banto ----------
+function card(t) {
+  const [pl, pc] = PRIO[t.priority] || PRIO.low;
+  const cl = t.checklist;
+  const sess = t.sessions.map(s => `<div class="sess"><span class="st ${esc(s.status)}">${ST[s.status] || esc(s.status)}</span>
+     <span class="nm">${s.unseen ? '<span style="color:var(--run)">●</span> ' : ""}${esc(s.name)}</span>
+     <span class="ag">${esc(s.agent)}${s.model ? "·" + esc(s.model) : ""}</span></div>`).join("");
+  const flags = [
+    t.review ? `<span class="flag rev">IN_REVIEW ★</span>` : "",
+    t.check ? `<span class="flag ${t.check.status === "ok" ? "ok" : t.check.status === "failed" ? "ng" : ""}">${t.check.status === "ok" ? "✔" : t.check.status === "failed" ? "✘" : "…"} check${t.check.duration ? " " + Math.round(t.check.duration) + "s" : ""}</span>` : "",
+  ].join("");
+  return `<div class="card ${t.review ? "review" : ""}" style="--pc:var(${pc})">
+    <div class="top"><span class="prio">${pl}</span><span class="genre">${GENRE[t.genre] || ""}</span><span class="id">#${esc(t.id)}</span></div>
+    <div class="title">${esc(t.title)}</div>
+    ${t.comment ? `<div class="cmt">${esc(t.comment)}</div>` : ""}
+    ${cl ? `<div class="prog"><div class="bar"><i style="width:${cl.total ? cl.done / cl.total * 100 : 0}%"></i></div>${cl.done}/${cl.total}</div>` : ""}
+    ${flags.trim() ? `<div class="flags">${flags}</div>` : ""}
+    ${sess ? `<div class="sessions">${sess}</div>` : ""}
+  </div>`;
+}
+
+function renderBanto(st) {
+  let html = "";
+  for (const d of st.devices || []) {
+    if (!d.online) { html += `<div class="devdown"><span class="dot off"></span><b>${esc(d.name)}</b> に接続できません <span class="dim mono">${esc(d.error || "")}</span></div>`; continue; }
+    const projs = d.snapshot?.banto?.projects || [];
+    if (!projs.length) { html += `<div class="devdown"><span class="dot"></span><b>${esc(d.name)}</b> banto の保存データがありません</div>`; continue; }
+    for (const p of projs) {
+      const tasks = p.tasks.filter(t => !t.root);
+      const byPrio = (a, b) => PR_RANK[a.priority] - PR_RANK[b.priority];
+      const active = tasks.filter(t => t.lane === "active").sort(byPrio);
+      // ルートのセッション (worktree なし) もあれば着手中に並べる
+      const roots = p.tasks.filter(t => t.root && t.sessions.length);
+      const lanes = ["backlog", "hold", "done"].map(l => [l, tasks.filter(t => t.lane === l).sort(byPrio)]).filter(([, a]) => a.length);
+      html += `<div class="proj">
+        <div class="proj-h"><span class="chip dev">${esc(d.name)}</span><span class="name">${esc(p.name)}</span>
+          <span class="meta"><span class="dot ${p.board_open ? "on" : ""}" title="${p.board_open ? "ボード起動中" : "ボード停止中"}"></span>${p.board_open ? "board open" : "board closed"} · ${ago(p.updated_at)}</span></div>
+        ${active.length || roots.length ? `<div class="cards">${active.map(card).join("")}${roots.map(r => card({ ...r, title: "ルートのセッション", genre: "" })).join("")}</div>` : `<div class="lanes"><span class="dim">着手中のタスクはありません</span></div>`}
+        ${lanes.length ? `<div class="lanes">${lanes.map(([l, a]) => `<span class="lane"><b>${LANE[l]} ${a.length}</b><span>${a.slice(0, 3).map(t => `#${esc(t.id)} ${esc(t.title)}`).join(" · ")}${a.length > 3 ? " …" : ""}</span></span>`).join("")}</div>` : ""}
+      </div>`;
+    }
+  }
+  $("banto").innerHTML = html || `<div class="devdown">デバイスが設定されていません</div>`;
+}
+
+// ---------- launch ----------
+const ICONS = {
+  ollama: `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#e6ebf2" stroke-width="1.6"><rect x="5" y="7" width="14" height="13" rx="6"/><path d="M8 7V4M16 7V4"/><circle cx="10" cy="13" r="1" fill="#e6ebf2"/><circle cx="14" cy="13" r="1" fill="#e6ebf2"/></svg>`,
+  router: `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#e6ebf2" stroke-width="1.6"><rect x="3" y="13" width="18" height="6" rx="2"/><path d="M7 13l-2-6M17 13l2-6M7 16h.01M11 16h.01"/></svg>`,
+  default: `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#e6ebf2" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>`,
+};
+const hostify = (u) => String(u || "").replaceAll("{host}", location.hostname);
+function linkIcon(l) {
+  // Open WebUI などは、そのサーバー自身の favicon を使う (読めなければ汎用アイコン)
+  const fav = l.favicon || (l.icon === "openwebui" ? hostify(l.url).replace(/\/$/, "") + "/static/favicon.png" : null);
+  const fb = ICONS[l.icon] || ICONS.default;
+  if (fav) return `<img src="${esc(fav)}" alt="" onerror="this.outerHTML=decodeURIComponent('${encodeURIComponent(fb)}')">`;
+  return fb;
+}
+function renderLinks(st) {
+  const ls = st.links || [];
+  $("links").innerHTML = ls.length ? ls.map(l => `<a class="tile" href="${esc(hostify(l.url))}" target="_blank" rel="noopener">
+      <span class="dot ${l.up === true ? "on" : l.up === false ? "off" : ""}"></span>
+      <span class="ic">${linkIcon(l)}</span><span class="nm">${esc(l.name)}</span>
+      <span class="lt">${l.up === false ? "down" : l.latency_ms != null ? Math.round(l.latency_ms) + " ms" : ""}</span></a>`).join("")
+    : `<span class="empty">config.json の links に追加してください</span>`;
+}
+
+// ---------- gaming ----------
+let wolArmed = 0;
+function renderGaming(st) {
+  const g = st.gaming;
+  if (!g) { $("gamingPanel").style.display = "none"; return; }
+  $("gamingPanel").style.display = "";
+  $("gHost").textContent = g.host || "";
+  const s = g.online ? ["ONLINE", "on", "var(--done)"] : g.waking ? ["WAKING…", "warn pulse", "var(--wait)"] : ["OFFLINE", "off", "var(--fail)"];
+  const sys = g.system;
+  const gpu = sys?.gpus?.[0];
+  const btnLabel = g.online ? "起動中" : wolArmed > Date.now() ? "もう一度押して送信" : "Wake on LAN";
+  $("gaming").innerHTML = `
+    <div class="power">
+      <span class="dot ${s[1]}" style="width:12px;height:12px"></span>
+      <div class="pstate"><span class="s" style="color:${s[2]}">${s[0]}</span>
+        <span class="dim">${g.online ? `${esc(g.via || "")} · ${fmtDur(Date.now() / 1000 - g.since)}継続` : g.waking ? "マジックパケット送信済み" : `${fmtDur(Date.now() / 1000 - g.since)}前から`}</span></div>
+      <button class="btn ${wolArmed > Date.now() && !g.online ? "arm" : ""}" id="wolBtn" ${g.online || !g.wol || g.waking ? "disabled" : ""}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg>${btnLabel}</button>
+    </div>
+    ${gpu ? `<div class="gauges">${gauge(gpu.util, "GPU", "var(--run)")}${gauge(gpu.mem_total ? gpu.mem_used / gpu.mem_total * 100 : null, "VRAM", "#a78bfa")}${gauge(gpu.temp, "°C", "var(--done)")}${gauge(sys.load && sys.cpus ? sys.load[0] / sys.cpus * 100 : null, "LOAD", "var(--amber)")}</div>
+      <dl class="kv"><dt>GPU</dt><dd>${esc(gpu.name)}</dd><dt>Power</dt><dd>${gpu.power != null ? gpu.power.toFixed(0) + " W" : "—"}</dd><dt>Uptime</dt><dd>${fmtDur(sys.uptime)}</dd></dl>` : ""}
+    ${!g.wol ? `<div class="empty" style="margin-top:8px">MAC アドレスがまだ分かりません (起動中に agent が一度名乗ると覚えます)</div>` : ""}`;
+  const b = $("wolBtn");
+  if (b) b.onclick = wake;
+}
+async function wake() {
+  if (wolArmed < Date.now()) { wolArmed = Date.now() + 4000; renderGaming(state); setTimeout(() => renderGaming(state), 4100); return; }
+  wolArmed = 0;
+  try {
+    const r = await fetch("/api/wol", { method: "POST", headers: { "X-Dashboard": "1" } });
+    const j = await r.json();
+    if (!j.ok) alert(j.error || "送信できませんでした");
+  } catch (e) { alert("送信できませんでした"); }
+  refresh();
+}
+
+// ---------- mac ----------
+function renderMac(st) {
+  const m = st.mac;
+  if (!m) { $("mac").innerHTML = `<div class="empty">macOS 上で hub.py を動かすと表示されます</div>`; return; }
+  $("macUp").textContent = "up " + fmtDur(m.uptime);
+  const memPct = m.mem_total ? m.mem_used / m.mem_total * 100 : null;
+  $("mac").innerHTML = `
+    <div class="mach-h"><div><div class="big">${esc(m.chip || "Mac")}</div>
+      <div class="sub">${esc(m.model || "")} · macOS ${esc(m.os || "")} · ${m.cores ? `${m.cores.perf}P+${m.cores.eff}E` : ""} · ${fmtGB(m.mem_total)}</div></div></div>
+    <div class="gauges">${gauge(m.cpu, "CPU", "var(--run)")}${gauge(m.gpu, "GPU", "#a78bfa")}${gauge(memPct, "MEM", "var(--amber)")}${gauge(m.mem_pressure, "PRESS", "var(--done)")}</div>
+    <div class="hbar"><div class="lbl"><span>Memory</span><span>${fmtGB(m.mem_used)} / ${fmtGB(m.mem_total)}</span></div><div class="bar"><i style="width:${memPct || 0}%"></i></div></div>
+    ${m.disk ? `<div class="hbar"><div class="lbl"><span>Disk</span><span>${fmtGB(m.disk.used)} / ${fmtGB(m.disk.total)}</span></div><div class="bar"><i style="width:${m.disk.used / m.disk.total * 100}%"></i></div></div>` : ""}
+    <dl class="kv"><dt>Load</dt><dd>${m.load ? m.load.map(x => x.toFixed(2)).join("  ") : "—"}</dd>
+      <dt>GPU mem (wired)</dt><dd>${m.gpu_mem ? fmtGB(m.gpu_mem) : "—"}</dd>
+      ${m.cpu_speed_limit != null && m.cpu_speed_limit < 100 ? `<dt>Thermal</dt><dd style="color:var(--wait)">CPU ${m.cpu_speed_limit}% に制限中</dd>` : ""}</dl>`;
+}
+
+// ---------- ollama ----------
+function renderOllama(st) {
+  const o = st.ollama;
+  if (!o) { $("ollama").innerHTML = `<div class="empty">未設定</div>`; return; }
+  $("ollVer").textContent = o.online ? "v" + (o.version || "?") : "";
+  if (!o.online) { $("ollama").innerHTML = `<div class="attn-empty" style="padding:0"><span class="dot off"></span>Ollama に接続できません <span class="dim mono">${esc(o.url)}</span></div>`; return; }
+  const run = o.running || [];
+  const now = Date.now();
+  const loaded = new Set(run.map(m => m.name));
+  $("ollama").innerHTML = (run.length ? run.map(m => {
+    const exp = m.expires_at ? (Date.parse(m.expires_at) - now) / 1000 : null;
+    const vr = m.size ? (m.size_vram || 0) / m.size * 100 : 0;
+    return `<div class="model"><div class="mn"><span class="dot on"></span><b>${esc(m.name)}</b>
+        <span class="ttl">${exp != null && exp > 0 && exp < 86400 * 365 ? "unload " + (exp < 60 ? Math.round(exp) + "s" : fmtDur(exp)) : "keep alive"}</span></div>
+      <div class="tags">${m.params ? `<span class="chip">${esc(m.params)}</span>` : ""}${m.quant ? `<span class="chip">${esc(m.quant)}</span>` : ""}${m.context ? `<span class="chip">ctx ${Math.round(m.context / 1024)}k</span>` : ""}<span class="chip">${fmtGB(m.size)}</span><span class="chip">${Math.round(vr)}% GPU</span></div>
+      <div class="bar"><i style="width:${vr}%"></i></div></div>`;
+  }).join("") : `<div class="empty">ロード中のモデルはありません</div>`)
+    + `<div class="inst">${(o.installed || []).map(m => `<span class="chip ${loaded.has(m.name) ? "loaded" : ""}" title="${esc(m.params || "")} ${esc(m.quant || "")}">${esc(m.name)} <span class="dim">${fmtGB(m.size)}</span></span>`).join("")}</div>`;
+}
+
+// ---------- footer ----------
+function renderFoot(st) {
+  $("foot").innerHTML = (st.devices || []).map(d => `<span class="d"><span class="dot ${d.online ? "on" : "off"}"></span>${esc(d.name)}${d.snapshot ? ` · agent ${esc(d.snapshot.agent_version)} · ${esc(d.snapshot.system?.hostname || "")}` : ""}</span>`).join("")
+    + `<span class="d" style="margin-left:auto">番頭台 · banto は読み取りのみ</span>`;
+}
+
+// ---------- mobile tabs ----------
+function setTab(t) {
+  document.body.dataset.tab = t;
+  document.querySelectorAll(".tabbar button").forEach(b => b.classList.toggle("on", b.dataset.go === t));
+  try { localStorage.setItem("tab", t); } catch (e) {}
+  window.scrollTo({ top: 0 });
+}
+document.querySelectorAll(".tabbar button").forEach(b => b.onclick = () => setTab(b.dataset.go));
+setTab((() => { try { return localStorage.getItem("tab"); } catch (e) { return null; } })() || "attn");
+function badge(id, n) { const e = $(id); e.textContent = n; e.classList.toggle("show", n > 0); }
+
+function render() {
+  if (!state) return;
+  const { items, k } = collect(state);
+  badge("tbAttn", items.length);
+  badge("tbBoard", k.running);
+  badge("tbMach", (state.devices || []).filter(d => !d.online && d.id !== state.gaming?.device_id).length);
+  badge("tbLlm", (state.ollama?.running || []).length);
+  renderKpis(k); renderAttention(items); renderBanto(state); renderLinks(state);
+  renderGaming(state); renderMac(state); renderOllama(state); renderFoot(state);
+  document.title = (k.waiting ? `(${k.waiting}) ` : "") + "番頭台 — Dev Console";
+}
+
+function tick() {
+  const d = new Date();
+  $("clock").querySelector(".t").textContent = d.toLocaleTimeString("ja-JP", { hour12: false });
+  const age = lastOk ? (Date.now() - lastOk) / 1000 : null;
+  $("clock").classList.toggle("stale", age == null || age > 20);
+  $("clock").querySelector(".u").innerHTML = (age == null ? "接続中…" : age > 20 ? `更新停止 ${Math.round(age)}s` : `更新 ${Math.round(age)}s前`) + (state?.demo ? '<span class="badge-demo">DEMO</span>' : "");
+}
+
+async function refresh() {
+  try {
+    const r = await fetch("/api/state", { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    state = await r.json(); lastOk = Date.now(); render();
+  } catch (e) { /* 次回に再試行 */ }
+  tick();
+}
+refresh();
+setInterval(refresh, 5000);
+setInterval(tick, 1000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+</script>
+</body>
+</html>
