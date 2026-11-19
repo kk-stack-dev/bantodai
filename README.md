@@ -78,7 +78,7 @@ Wi-Fi のクライアント分離や別セグメントなどでブロードキ�
 | --- | --- |
 | `local_name` | Mac mini 自身の表示名 |
 | `devices` | 手で足すデバイス。`{"id", "name", "agent": "http://<host>.local:8765"}` |
-| `gaming_pc` | 自動検出を使わずに固定する場合だけ書きます (`host` / `mac` / `broadcast` / `device_id`) |
+| `gaming_pc` | 自動検出した値に上書きで重ねます。`{"mac": "34:5A:60:EA:E8:D2"}` だけ書けば、IP は自動のまま MAC を固定でき、agent を一度も起動していなくても WoL を送れます。`host` / `broadcast` / `name` も書けます |
 | `discovery.enabled` | `false` で自動検出を止めます |
 | `links[].icon` | `openwebui` / `ollama` / `router`。`favicon` に URL を書いてアイコンを指定することもできます |
 

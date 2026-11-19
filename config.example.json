@@ -1,15 +1,24 @@
 {
   "_comment": "config.json は無くても動きます。変えたい項目だけ書いてください (書いた項目は既定値を丸ごと置き換えます)",
-
   "local_name": "Mac mini",
-
+  "_gaming_comment": "IP は自動検出。MAC だけ固定したいとき (agent を一度も起動していなくても WoL できる)",
+  "gaming_pc": {
+    "mac": "34:5A:60:EA:E8:D2"
+  },
   "links": [
-    { "name": "Open WebUI", "url": "http://{host}:3000",  "health": "http://127.0.0.1:3000/health",      "icon": "openwebui" },
-    { "name": "Ollama API", "url": "http://{host}:11434", "health": "http://127.0.0.1:11434/api/version", "icon": "ollama" }
+    {
+      "name": "Open WebUI",
+      "url": "http://{host}:3000",
+      "health": "http://127.0.0.1:3000/health",
+      "icon": "openwebui"
+    },
+    {
+      "name": "Ollama API",
+      "url": "http://{host}:11434",
+      "health": "http://127.0.0.1:11434/api/version",
+      "icon": "ollama"
+    }
   ],
-
-  "_devices_comment": "自動検出が届かないデバイスだけ、ホスト名 (.local) で足せます",
-  "devices": [
-    { "id": "kk-mbp", "name": "MacBook Pro", "agent": "http://kk-mbp.local:8765" }
-  ]
+  "_devices_comment": "自動検出が届かないデバイスだけ足す。例: {\"id\": \"kk-mbp\", \"name\": \"MacBook Pro\", \"agent\": \"http://kk-mbp.local:8765\"}",
+  "devices": []
 }

@@ -474,16 +474,21 @@ class Hub:
         return out
 
     def gaming_cfg(self, devices: list[dict]) -> dict | None:
-        g = self.cfg.get("gaming_pc")
-        if g:
-            return g
+        """自動検出した --role gaming の agent に、config.json の gaming_pc を上書きで重ねる
+        (例: {"gaming_pc": {"mac": "34:5A:60:EA:E8:D2"}} だけ書けば、IP は自動・MAC は固定)"""
+        g = self.cfg.get("gaming_pc") or {}
         d = next((d for d in devices if d.get("role") == "gaming"), None)
-        if not d:
+        auto = {}
+        if d:
+            ip = d.get("ip", "")
+            auto = {"name": d["name"], "host": ip, "mac": d.get("mac"), "device_id": d["id"],
+                    "broadcast": ".".join(ip.split(".")[:3] + ["255"]) if ip.count(".") == 3 else None,
+                    "probe_ports": [3389, 445], "ping": True}
+        merged = {**auto, **{k: v for k, v in g.items() if v not in (None, "")}}
+        if not merged:
             return None
-        ip = d.get("ip", "")
-        return {"name": d["name"], "host": ip, "mac": d.get("mac"), "device_id": d["id"],
-                "broadcast": ".".join(ip.split(".")[:3] + ["255"]) if ip.count(".") == 3 else None,
-                "probe_ports": [3389, 445], "ping": True}
+        merged.setdefault("name", "Gaming PC")
+        return merged
 
     def poll_once(self):
         if self.demo:
