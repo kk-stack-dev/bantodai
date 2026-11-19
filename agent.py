@@ -30,7 +30,7 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-AGENT_VERSION = "1.1.0"
+AGENT_VERSION = "1.2.0"
 STARTED_AT = time.time()
 ALLOW_SLEEP = False  # --allow-sleep で True
 
@@ -320,14 +320,24 @@ class _WinGpu:
     def _update(self):
         try:
             util, mem = self._sample()
+            lhm = _lhm_gpu_sensors()
             mib = 1024 * 1024
+
+            def sensor(name: str, key: str):
+                n = name.strip().lower()
+                if n in lhm:  # 完全一致を優先し、無ければ部分一致
+                    return lhm[n].get(key)
+                for hw, v in lhm.items():
+                    if hw in n or n in hw:
+                        return v.get(key)
+                return None
             self.result = [{
                 "name": a["name"],
                 "util": round(util[a["luid"]], 1) if a["luid"] in util else None,
-                "temp": None,
+                "temp": sensor(a["name"], "temp"),
                 "mem_used": round(mem[a["luid"]] / mib) if a["luid"] in mem else None,
                 "mem_total": round(a["mem_total"] / mib),
-                "power": None,
+                "power": sensor(a["name"], "power"),
             } for a in self.adapters]
         except Exception:
             pass
@@ -339,6 +349,78 @@ class _WinGpu:
 
 
 _win_gpu: _WinGpu | None = None
+_lhm_retry_at = 0.0
+
+
+def _lhm_gpu_sensors() -> dict[str, dict]:
+    """LibreHardwareMonitor の Web サーバー (Options → Remote Web Server) が動いていれば、
+    GPU ごとの温度 (°C) と消費電力 (W) を返す。キーは小文字の GPU 名。動いていなければ空
+    (1 分は問い合わせ直さない)。URL は BANTO_LHM_URL で変えられる"""
+    global _lhm_retry_at
+    if time.time() < _lhm_retry_at:
+        return {}
+    url = os.environ.get("BANTO_LHM_URL", "http://127.0.0.1:8085/data.json")
+    try:
+        import urllib.request
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(url, timeout=1) as r:
+            root = json.loads(r.read().decode("utf-8"))
+    except Exception:
+        _lhm_retry_at = time.time() + 60
+        return {}
+
+    def num(v) -> float | None:
+        try:  # "45.0 °C" / "35,2 W" (ロケールで小数点がカンマのこともある)
+            return round(float(str(v).split()[0].replace(",", ".")), 1)
+        except (ValueError, IndexError):
+            return None
+
+    found: dict[str, dict] = {}
+
+    def walk(node: dict, path: list[str]):
+        kids = node.get("Children") or []
+        if not kids and len(path) >= 2:
+            group, hw = path[-1], path[-2]  # 例: [..., "AMD Radeon RX 9070 XT", "Temperatures"] → "GPU Core"
+            sid = str(node.get("SensorId") or "")
+            if sid and not sid.startswith("/gpu"):
+                return
+            key = "temp" if group == "Temperatures" else "power" if group == "Powers" else None
+            if key:
+                v = num(node.get("Value"))
+                want = "GPU Core" if key == "temp" else "GPU Package"
+                cur = found.setdefault(hw.strip().lower(), {})
+                # 名前が合うセンサーを優先し、無ければ最初のものを使う
+                if v is not None and (node.get("Text") == want or key not in cur):
+                    cur[key] = v
+            return
+        for k in kids:
+            walk(k, path + [str(node.get("Text") or "")])
+    walk(root, [])
+    return {hw: v for hw, v in found.items() if v}
+
+
+_cpu_prev: tuple[int, int] | None = None
+
+
+def cpu_percent() -> float | None:
+    """Windows の CPU 使用率 (前回呼ばれてからの平均)。load average が無い Windows 向け"""
+    global _cpu_prev
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes as w
+        idle, kern, user = w.FILETIME(), w.FILETIME(), w.FILETIME()
+        if not ctypes.windll.kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kern), ctypes.byref(user)):
+            return None
+        ft = lambda f: (f.dwHighDateTime << 32) | f.dwLowDateTime
+        cur = (ft(idle), ft(kern) + ft(user))  # kernel には idle も含まれる
+        prev, _cpu_prev = _cpu_prev, cur
+        if prev is None or cur[1] <= prev[1]:
+            return None
+        return round(max(0.0, min(100.0, (1 - (cur[0] - prev[0]) / (cur[1] - prev[1])) * 100)), 1)
+    except Exception:
+        return None
 
 
 def collect_gpu() -> list[dict]:
@@ -404,6 +486,7 @@ def collect_system() -> dict:
         "arch": platform.machine(),
         "cpus": os.cpu_count(),
         "load": load,
+        "cpu": cpu_percent(),
         "uptime": uptime_seconds(),
         "disk": disk,
         "gpus": collect_gpu(),

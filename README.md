@@ -76,7 +76,10 @@ pythonw agent.py --name "Gaming PC" --role gaming --allow-sleep
 - `--allow-sleep` を付けると、画面からこの PC をスリープさせられます ([スリープ](#スリープ))。付けなければ agent は読み取り専用のままです
 - **最初の 1 回だけ**、PC を起動した状態で agent を動かしてください。そのとき hub が ARP テーブルから実際に通信した NIC の MAC アドレスを覚えます
 - タスクスケジューラの「ログオン時」に登録して常駐させます。Windows ファイアウォールの許可を求められたら「プライベートネットワーク」だけを許可します
-- `nvidia-smi` があれば GPU の情報も返します。無い場合 (AMD・Intel など) は、Windows の DXGI とパフォーマンスカウンターから GPU 使用率と VRAM を返します。温度と消費電力は取れないので「—」になります。WSL の中で banto を使っている場合は、WSL の中でも agent を動かしてください (役割なしで)
+- GPU の情報: NVIDIA は `nvidia-smi` から取ります。それ以外 (AMD・Intel など) は、Windows の DXGI とパフォーマンスカウンターから GPU 使用率と VRAM を取ります
+- AMD・Intel の温度と消費電力は Windows の標準 API に無いので、そのままでは「—」です。[LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) を管理者で常駐させ、Options → Remote Web Server を有効にしておくと、そこ (`http://127.0.0.1:8085/data.json`。`BANTO_LHM_URL` で変更可) から読みます
+- Windows には load average が無いので、代わりに CPU 使用率を返します
+- WSL の中で banto を使っている場合は、WSL の中でも agent を動かしてください (役割なしで)
 
 **自動検出が届かないとき**
 
@@ -101,7 +104,7 @@ python3 agent.py --allow-sleep  # hub からこの PC をスリープさせら�
 
 ## Wake-on-LAN
 
-- ボタンは誤操作を防ぐため 2 回押しで送ります (1 回目で「もう一度押して送信」に変わり、4 秒で元に戻ります)
+- ボタンを押すと確認のモーダルが出ます。「起動する」を押したときだけ送ります (誤操作を防ぐため)
 - 送信後、最大 3 分は `WAKING…` と表示します
 - 他のサイトから勝手に送られないよう、`/api/wol` は独自ヘッダー `X-Dashboard: 1` が無いリクエストを拒否します
 - ゲーミング PC 側では、BIOS/UEFI の WoL と、NIC の詳細設定の「Magic Packet で起動」を有効にしておきます
@@ -110,7 +113,7 @@ python3 agent.py --allow-sleep  # hub からこの PC をスリープさせら�
 
 Gaming PC が起動中で、agent を `--allow-sleep` 付きで動かしていれば、Wake on LAN のボタンが「スリープ」に変わります。
 
-- WoL と同じく 2 回押しで送ります。hub が agent の `POST /api/sleep` に中継し、agent は応答を返してから約 1.5 秒後にスリープします
+- WoL と同じく、確認のモーダルで「スリープする」を押したときだけ送ります。hub が agent の `POST /api/sleep` に中継し、agent は応答を返してから約 1.5 秒後にスリープします
 - 送信後、PC が応答しなくなるまで (最大 90 秒) `SLEEPING…` と表示します。起こすときは、いつもの Wake on LAN です
 - Windows では休止状態ではなくスリープにします (`SetSuspendState`。WoL で起こせるよう、起動イベントは有効のまま)。macOS は `pmset sleepnow`、Linux は `systemctl suspend` です
 - スリープからの WoL には、NIC の電源の管理で「このデバイスで、コンピューターのスタンバイ状態を解除できるようにする」と「Magic Packet でのみ…」を有効にしておきます

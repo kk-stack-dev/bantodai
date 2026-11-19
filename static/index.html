@@ -169,7 +169,6 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;padding:16p
   padding:9px 14px;border-radius:8px;cursor:pointer;display:flex;align-items:center;gap:8px;white-space:nowrap}
 .btn:hover:not(:disabled){border-color:var(--amber);color:var(--amber)}
 .btn:disabled{opacity:.45;cursor:not-allowed}
-.btn.arm{background:var(--amber);color:#1b1205;border-color:var(--amber)}
 .gauges{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}
 .gauge{text-align:center}
 .gauge svg{width:100%;max-width:74px;height:auto;display:block;margin:0 auto}
@@ -258,6 +257,11 @@ footer .d{display:flex;align-items:center;gap:6px}
   </ul>
   <p class="msg" id="ntfMsg"></p>
   <div class="btns" id="ntfBtns"></div>
+</dialog>
+<dialog class="ntf" id="pwr">
+  <h3 id="pwrTitle"></h3>
+  <p id="pwrText"></p>
+  <div class="btns"><button type="button" id="pwrCancel">キャンセル</button><button type="button" class="pri" id="pwrOk"></button></div>
 </dialog>
 
 <main>
@@ -442,7 +446,6 @@ function renderLinks(st) {
 }
 
 // ---------- gaming ----------
-let wolArmed = 0;
 function renderGaming(st) {
   const g = st.gaming;
   if (!g) { $("gamingPanel").style.display = "none"; return; }
@@ -452,11 +455,9 @@ function renderGaming(st) {
     : g.waking ? ["WAKING…", "warn pulse", "var(--wait)"] : ["OFFLINE", "off", "var(--fail)"];
   const sys = g.system;
   const gpu = sys?.gpus?.[0];
-  const armed = wolArmed > Date.now();
   // 起動中: --allow-sleep の agent ならスリープ、そうでなければ押せない / 停止中: Wake on LAN
   const mode = g.online ? (g.can_sleep ? "sleep" : "none") : "wake";
-  const btnLabel = mode === "sleep" ? (g.sleeping ? "スリープ中…" : armed ? "もう一度押してスリープ" : "スリープ")
-    : mode === "none" ? "起動中" : armed ? "もう一度押して送信" : "Wake on LAN";
+  const btnLabel = mode === "sleep" ? (g.sleeping ? "スリープ中…" : "スリープ") : mode === "none" ? "起動中" : "Wake on LAN";
   const btnOff = mode === "none" || (mode === "sleep" && g.sleeping) || (mode === "wake" && (!g.wol || g.waking));
   const sub = g.online ? (g.sleeping ? "スリープを送信済み" : `${esc(g.via || "")} · ${fmtDur(Date.now() / 1000 - g.since)}継続`)
     : g.waking ? "マジックパケット送信済み" : `${fmtDur(Date.now() / 1000 - g.since)}前から`;
@@ -465,21 +466,31 @@ function renderGaming(st) {
       <span class="dot ${s[1]}" style="width:12px;height:12px"></span>
       <div class="pstate"><span class="s" style="color:${s[2]}">${s[0]}</span>
         <span class="dim">${sub}</span></div>
-      <button class="btn ${armed && !btnOff ? "arm" : ""}" id="wolBtn" data-mode="${mode}" ${btnOff ? "disabled" : ""}>
+      <button class="btn" id="wolBtn" data-mode="${mode}" ${btnOff ? "disabled" : ""}>
         ${mode === "sleep" ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>`
           : `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg>`}${btnLabel}</button>
     </div>
-    ${gpu ? `<div class="gauges">${gauge(gpu.util, "GPU", "var(--run)")}${gauge(gpu.mem_total ? gpu.mem_used / gpu.mem_total * 100 : null, "VRAM", "#a78bfa")}${gauge(gpu.temp, "°C", "var(--done)")}${gauge(sys.load && sys.cpus ? sys.load[0] / sys.cpus * 100 : null, "LOAD", "var(--amber)")}</div>
+    ${gpu ? `<div class="gauges">${gauge(gpu.util, "GPU", "var(--run)")}${gauge(gpu.mem_total ? gpu.mem_used / gpu.mem_total * 100 : null, "VRAM", "#a78bfa")}${gauge(gpu.temp, "°C", "var(--done)")}${sys.cpu != null ? gauge(sys.cpu, "CPU", "var(--amber)") : gauge(sys.load && sys.cpus ? sys.load[0] / sys.cpus * 100 : null, "LOAD", "var(--amber)")}</div>
       <dl class="kv"><dt>GPU</dt><dd>${esc(gpu.name)}</dd><dt>Power</dt><dd>${gpu.power != null ? gpu.power.toFixed(0) + " W" : "—"}</dd><dt>Uptime</dt><dd>${fmtDur(sys.uptime)}</dd></dl>` : ""}
     ${!g.wol ? `<div class="empty" style="margin-top:8px">MAC アドレスがまだ分かりません (起動中に agent が一度名乗ると覚えます)</div>` : ""}`;
   const b = $("wolBtn");
-  if (b) b.onclick = () => powerAction(b.dataset.mode);
+  if (b) b.onclick = () => powerConfirm(b.dataset.mode);
 }
-// Wake on LAN とスリープは、誤操作を防ぐため 2 回押しで送る
-async function powerAction(mode) {
+// Wake on LAN とスリープは、誤操作を防ぐため確認のモーダルを出してから送る
+function powerConfirm(mode) {
   if (mode !== "wake" && mode !== "sleep") return;
-  if (wolArmed < Date.now()) { wolArmed = Date.now() + 4000; renderGaming(state); setTimeout(() => renderGaming(state), 4100); return; }
-  wolArmed = 0;
+  const name = state?.gaming?.name || "Gaming PC";
+  $("pwrTitle").textContent = mode === "sleep" ? `${name} をスリープしますか？` : `${name} を起動しますか？`;
+  $("pwrText").textContent = mode === "sleep"
+    ? "保存していない作業やゲームがあれば先に閉じてください。起こすときは Wake on LAN を使います。"
+    : "Wake on LAN のマジックパケットを送ります。起動まで 1 分ほどかかります。";
+  $("pwrOk").textContent = mode === "sleep" ? "スリープする" : "起動する";
+  $("pwrOk").onclick = () => { $("pwr").close(); powerAction(mode); };
+  $("pwr").showModal();
+}
+$("pwrCancel").onclick = () => $("pwr").close();
+$("pwr").addEventListener("click", (e) => { if (e.target === $("pwr")) $("pwr").close(); });
+async function powerAction(mode) {
   try {
     const r = await fetch(mode === "sleep" ? "/api/sleep" : "/api/wol", { method: "POST", headers: { "X-Dashboard": "1" } });
     const j = await r.json();
