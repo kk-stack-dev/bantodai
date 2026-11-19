@@ -336,11 +336,26 @@ class Gaming:
             return {"ok": False, "error": "MAC アドレスがまだ分かりません"}
         packet = b"\xff" * 6 + bytes.fromhex(mac) * 16
         targets = {cfg.get("broadcast") or "255.255.255.255", "255.255.255.255"}
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            for t in targets:
-                for port in (9, 7):
-                    s.sendto(packet, (t, port))
+        # macOS のローカルネットワーク許可: 初回の送信は許可ダイアログを出すだけで
+        # EHOSTUNREACH (Errno 65) になる。許可されるまで少し待って送り直す
+        deadline = time.time() + 15
+        while True:
+            sent, last_err = 0, None
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                for t in targets:
+                    for port in (9, 7):
+                        try:
+                            s.sendto(packet, (t, port))
+                            sent += 1
+                        except OSError as e:
+                            last_err = e
+            if sent or time.time() >= deadline:
+                break
+            time.sleep(0.5)
+        if not sent:
+            print(f"wol: 送信できません: {last_err}", file=sys.stderr)
+            return {"ok": False, "error": "送信できません。macOS の「ローカルネットワーク」で Python を許可してください"}
         self.wol_sent_at = time.time()
         return {"ok": True}
 
