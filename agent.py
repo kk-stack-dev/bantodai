@@ -2,12 +2,16 @@
 """banto 収集エージェント (読み取り専用)
 
 各デバイスで動かし、banto.nvim の保存ファイル (stdpath("data")/banto/*.json) を
-読み取って JSON で返す。書き込み・操作の API は持たない。
+読み取って JSON で返す。banto への書き込み API は持たない。
 LAN (プライベート IP) 以外からのアクセスは 403 で拒否する。
+
+操作は 1 つだけ: --allow-sleep を付けて起動したときに限り、POST /api/sleep でこの PC をスリープさせる
+(付けなければ GET 以外はすべて 405)。
 
   python3 agent.py                 # 0.0.0.0:8765 で待ち受け
   python3 agent.py --port 8765 --bind 0.0.0.0
   BANTO_DATA_DIR=/path/to/banto python3 agent.py
+  pythonw agent.py --name "Gaming PC" --role gaming --allow-sleep
 
 標準ライブラリのみ。macOS / Linux / Windows で動く。
 """
@@ -26,8 +30,9 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-AGENT_VERSION = "1.0.0"
+AGENT_VERSION = "1.1.0"
 STARTED_AT = time.time()
+ALLOW_SLEEP = False  # --allow-sleep で True
 
 
 # ---------------------------------------------------------------- banto ----
@@ -410,9 +415,69 @@ def snapshot() -> dict:
         "agent_version": AGENT_VERSION,
         "time": time.time(),
         "agent_uptime": time.time() - STARTED_AT,
+        "can_sleep": ALLOW_SLEEP,
         "system": collect_system(),
         "banto": collect_banto(),
     }
+
+
+# ---------------------------------------------------------------- sleep ----
+
+def _win_sleep() -> bool:
+    """Windows をスリープ (S3 / モダンスタンバイ) させる。休止状態にはしない"""
+    import ctypes
+    from ctypes import wintypes
+
+    class LUID(ctypes.Structure):
+        _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
+
+    class LUID_AND_ATTRIBUTES(ctypes.Structure):
+        _fields_ = [("Luid", LUID), ("Attributes", wintypes.DWORD)]
+
+    class TOKEN_PRIVILEGES(ctypes.Structure):
+        _fields_ = [("PrivilegeCount", wintypes.DWORD), ("Privileges", LUID_AND_ATTRIBUTES * 1)]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    powrprof = ctypes.WinDLL("powrprof", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    advapi32.LookupPrivilegeValueW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.POINTER(LUID)]
+    advapi32.AdjustTokenPrivileges.argtypes = [wintypes.HANDLE, wintypes.BOOL, ctypes.POINTER(TOKEN_PRIVILEGES),
+                                               wintypes.DWORD, ctypes.c_void_p, ctypes.c_void_p]
+    powrprof.SetSuspendState.argtypes = [wintypes.BOOLEAN, wintypes.BOOLEAN, wintypes.BOOLEAN]
+    powrprof.SetSuspendState.restype = wintypes.BOOLEAN
+
+    # スリープには SeShutdownPrivilege を有効にしておく必要がある (ふつうのユーザーも持っているが既定は無効)
+    tok = wintypes.HANDLE()
+    if advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), 0x0020 | 0x0008, ctypes.byref(tok)):  # ADJUST_PRIVILEGES | QUERY
+        luid = LUID()
+        if advapi32.LookupPrivilegeValueW(None, "SeShutdownPrivilege", ctypes.byref(luid)):
+            tp = TOKEN_PRIVILEGES(1, (LUID_AND_ATTRIBUTES * 1)(LUID_AND_ATTRIBUTES(luid, 0x2)))  # SE_PRIVILEGE_ENABLED
+            advapi32.AdjustTokenPrivileges(tok, False, ctypes.byref(tp), 0, None, None)
+        kernel32.CloseHandle(tok)
+    # (休止状態にしない, 強制しない, 起動イベントを無効にしない) -- WoL で起こせるように 3 つ目は False
+    return bool(powrprof.SetSuspendState(False, False, False))
+
+
+def sleep_now():
+    """少し待ってから (HTTP の応答を返し終えてから) スリープさせる"""
+    time.sleep(1.5)
+    if os.environ.get("BANTO_SLEEP_DRY_RUN"):  # テスト用: 実際には眠らせない
+        print("sleep: dry run", file=sys.stderr, flush=True)
+        return
+    try:
+        if os.name == "nt":
+            ok = _win_sleep()
+        elif sys.platform == "darwin":
+            ok = subprocess.run(["pmset", "sleepnow"], capture_output=True, timeout=10).returncode == 0
+        else:
+            ok = subprocess.run(["systemctl", "suspend"], capture_output=True, timeout=10).returncode == 0
+        if not ok:
+            print("sleep: スリープできませんでした", file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"sleep: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
 
 # ----------------------------------------------------------------- http ----
@@ -455,7 +520,19 @@ class Handler(BaseHTTPRequestHandler):
     def _deny(self):
         self._send(405, {"error": "read-only"})
 
-    do_POST = do_PUT = do_DELETE = do_PATCH = _deny
+    def do_POST(self):
+        if not is_lan(self.client_address[0]):
+            return self._send(403, {"error": "LAN only"})
+        if self.path.split("?")[0] != "/api/sleep" or not ALLOW_SLEEP:
+            return self._deny()
+        # 独自ヘッダー必須 (ブラウザから他サイト経由で送られるのを防ぐ。付けるとプリフライトが要り、agent は応じない)
+        if self.headers.get("X-Dashboard") != "1":
+            return self._send(403, {"error": "missing header"})
+        import threading
+        threading.Thread(target=sleep_now, daemon=True).start()
+        return self._send(200, {"ok": True})
+
+    do_PUT = do_DELETE = do_PATCH = _deny
 
 
 BEACON_PORT = 8766
@@ -496,14 +573,18 @@ def main():
     ap.add_argument("--no-beacon", action="store_true", help="自動検出用のブロードキャストを止める")
     ap.add_argument("--beacon-port", type=int, default=BEACON_PORT)
     ap.add_argument("--once", action="store_true", help="1 回だけ収集して標準出力に出す")
+    ap.add_argument("--allow-sleep", action="store_true", help="hub から POST /api/sleep でこの PC をスリープさせられるようにする")
     a = ap.parse_args()
+    global ALLOW_SLEEP
+    ALLOW_SLEEP = a.allow_sleep
     if a.once:
         print(json.dumps(snapshot(), ensure_ascii=False, indent=2))
         return
     srv = ThreadingHTTPServer((a.bind, a.port), Handler)
     if not a.no_beacon:
         beacon_loop(a.name or socket.gethostname(), a.role, a.port, a.beacon_port)
-    print(f"banto-agent {AGENT_VERSION} listening on {a.bind}:{a.port} (data: {banto_data_dirs() or 'not found'})")
+    print(f"banto-agent {AGENT_VERSION} listening on {a.bind}:{a.port} (data: {banto_data_dirs() or 'not found'})"
+          + (" [sleep 可]" if ALLOW_SLEEP else ""))
     srv.serve_forever()
 
 

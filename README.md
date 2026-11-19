@@ -5,7 +5,7 @@ LAN 内専用の開発ダッシュボードです。1 画面で次のものを�
 - **Attention**: 全デバイスの banto で、承認待ち・確認待ち (IN_REVIEW)・未読のセッションを優先度順に並べます
 - **banto ボード**: デバイスごと・リポジトリごとに、着手中のカードを表示します。未着手・保留・完了は件数とタイトルだけを出します
 - **Launch**: Open WebUI などのリンクと、それぞれの死活・応答時間
-- **Gaming PC**: オンラインかどうか、Wake-on-LAN ボタン、GPU 使用率・VRAM・温度 (agent を入れた場合)
+- **Gaming PC**: オンラインかどうか、Wake-on-LAN とスリープのボタン、GPU 使用率・VRAM・温度 (agent を入れた場合)
 - **Mac mini**: チップ、CPU・GPU・メモリ使用率、メモリプレッシャー、ディスク、熱による制限
 - **Ollama**: ロード中のモデル (VRAM の量、アンロードまでの残り時間、コンテキスト長) とインストール済みのモデル
 
@@ -26,7 +26,7 @@ agent は依存パッケージなしで、Python 3.9 以降の標準ライブラ
                                     └ Open WebUI の死活確認
 ```
 
-- `agent.py`: 各デバイスで動かします。banto.nvim の保存ファイル (`~/.local/share/nvim/banto/*.json`) を**読むだけ**です。GET 以外のリクエストには 405 を返します
+- `agent.py`: 各デバイスで動かします。banto.nvim の保存ファイル (`~/.local/share/nvim/banto/*.json`) を**読むだけ**です。GET 以外のリクエストには 405 を返します (`--allow-sleep` を付けたときの `POST /api/sleep` だけは例外)
 - `hub.py`: Mac mini で動かします。各デバイスの agent から情報を集め、画面を配信します
 - どちらも、プライベート IP 以外からのアクセスには 403 を返します
 
@@ -69,10 +69,11 @@ python3 agent.py --name "MacBook Pro"
 **Gaming PC (Windows)**
 
 ```bat
-pythonw agent.py --name "Gaming PC" --role gaming
+pythonw agent.py --name "Gaming PC" --role gaming --allow-sleep
 ```
 
 - `--role gaming` を付けた agent が Gaming PC 欄に入り、WoL の対象になります
+- `--allow-sleep` を付けると、画面からこの PC をスリープさせられます ([スリープ](#スリープ))。付けなければ agent は読み取り専用のままです
 - **最初の 1 回だけ**、PC を起動した状態で agent を動かしてください。そのとき hub が ARP テーブルから実際に通信した NIC の MAC アドレスを覚えます
 - タスクスケジューラの「ログオン時」に登録して常駐させます。Windows ファイアウォールの許可を求められたら「プライベートネットワーク」だけを許可します
 - `nvidia-smi` があれば GPU の情報も返します。無い場合 (AMD・Intel など) は、Windows の DXGI とパフォーマンスカウンターから GPU 使用率と VRAM を返します。温度と消費電力は取れないので「—」になります。WSL の中で banto を使っている場合は、WSL の中でも agent を動かしてください (役割なしで)
@@ -95,6 +96,7 @@ Wi-Fi のクライアント分離や別セグメントなどでブロードキ�
 python3 agent.py --once       # 収集結果を 1 回だけ表示して確認する
 BANTO_DATA_DIR=... python3 agent.py   # banto の persist.dir を変えている場合
 python3 agent.py --no-beacon  # 自動検出用のブロードキャストを止める
+python3 agent.py --allow-sleep  # hub からこの PC をスリープさせられるようにする
 ```
 
 ## Wake-on-LAN
@@ -103,6 +105,16 @@ python3 agent.py --no-beacon  # 自動検出用のブロードキャストを止
 - 送信後、最大 3 分は `WAKING…` と表示します
 - 他のサイトから勝手に送られないよう、`/api/wol` は独自ヘッダー `X-Dashboard: 1` が無いリクエストを拒否します
 - ゲーミング PC 側では、BIOS/UEFI の WoL と、NIC の詳細設定の「Magic Packet で起動」を有効にしておきます
+
+## スリープ
+
+Gaming PC が起動中で、agent を `--allow-sleep` 付きで動かしていれば、Wake on LAN のボタンが「スリープ」に変わります。
+
+- WoL と同じく 2 回押しで送ります。hub が agent の `POST /api/sleep` に中継し、agent は応答を返してから約 1.5 秒後にスリープします
+- 送信後、PC が応答しなくなるまで (最大 90 秒) `SLEEPING…` と表示します。起こすときは、いつもの Wake on LAN です
+- Windows では休止状態ではなくスリープにします (`SetSuspendState`。WoL で起こせるよう、起動イベントは有効のまま)。macOS は `pmset sleepnow`、Linux は `systemctl suspend` です
+- スリープからの WoL には、NIC の電源の管理で「このデバイスで、コンピューターのスタンバイ状態を解除できるようにする」と「Magic Packet でのみ…」を有効にしておきます
+- agent は LAN 内からの、独自ヘッダー `X-Dashboard: 1` 付きのリクエストだけを受け付けます (ブラウザが他のサイトから送ろうとしても、プリフライトで止まります)。LAN 内の機器なら誰でも送れるので、それが困る環境では `--allow-sleep` を付けないでください
 
 ## スマホに通知を送る
 
@@ -160,6 +172,8 @@ python3 agent.py --no-beacon  # 自動検出用のブロードキャストを止
 | --- | --- |
 | `GET hub:/api/state` | 画面が使う全データ |
 | `POST hub:/api/wol` | WoL を送る (ヘッダー `X-Dashboard: 1` が必須) |
+| `POST hub:/api/sleep` | Gaming PC の agent にスリープを中継する (ヘッダー `X-Dashboard: 1` が必須) |
 | `GET agent:/api/snapshot` | そのデバイスの banto とシステムの情報 |
 | `GET agent:/api/health` | 死活確認 |
+| `POST agent:/api/sleep` | その PC をスリープさせる。`--allow-sleep` で起動したときだけ (ヘッダー `X-Dashboard: 1` が必須) |
 | `UDP 8766` (ブロードキャスト) | agent が名乗る。中身は名前・役割・待ち受けポート・MAC だけ |

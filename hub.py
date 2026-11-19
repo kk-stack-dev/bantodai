@@ -26,6 +26,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -142,6 +143,20 @@ def http_json(url: str, timeout: float = 2.5):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with opener.open(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
+
+
+def http_post(url: str, timeout: float = 4.0) -> dict:
+    """agent への操作 (今はスリープだけ)。独自ヘッダーを付ける"""
+    req = urllib.request.Request(url, data=b"", method="POST", headers={"X-Dashboard": "1", "Accept": "application/json"})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            return {"ok": False, "status": e.code, **json.loads(e.read().decode("utf-8"))}
+        except ValueError:
+            return {"ok": False, "status": e.code}
 
 
 def http_ok(url: str, timeout: float = 2.0) -> tuple[bool, float | None]:
@@ -302,6 +317,7 @@ class Gaming:
 
     def __init__(self):
         self.wol_sent_at = 0.0
+        self.sleep_sent_at = 0.0
         self.last_online_change = time.time()
         self.prev_online = None
 
@@ -313,7 +329,8 @@ class Gaming:
                "wol": bool(cfg.get("mac"))}
         dev = next((d for d in devices if d["id"] == cfg.get("device_id")), None)
         if dev and dev.get("online"):
-            out.update(online=True, via="agent", system=dev["snapshot"].get("system"))
+            out.update(online=True, via="agent", system=dev["snapshot"].get("system"),
+                       can_sleep=bool(dev["snapshot"].get("can_sleep")))
         elif host:
             for p in cfg.get("probe_ports", [3389, 22, 445]):
                 if tcp_ok(host, int(p)):
@@ -327,9 +344,31 @@ class Gaming:
         out["since"] = self.last_online_change
         if out["online"]:
             self.wol_sent_at = 0.0
+        else:
+            self.sleep_sent_at = 0.0
         out["waking"] = (not out["online"]) and (time.time() - self.wol_sent_at < 180)
         out["wol_sent_at"] = self.wol_sent_at or None
+        out["sleeping"] = out["online"] and (time.time() - self.sleep_sent_at < 90)
+        out.setdefault("can_sleep", False)
         return out
+
+    def sleep(self, cfg: dict, devs: list[dict]) -> dict:
+        """Gaming PC の agent に POST /api/sleep を送る (agent を --allow-sleep で起動している場合だけ通る)"""
+        if time.time() - self.sleep_sent_at < 10:
+            return {"ok": False, "error": "送信したばかりです"}
+        dev = next((d for d in devs if d["id"] == cfg.get("device_id")), None)
+        if not dev or not str(dev.get("agent", "")).startswith("http"):
+            return {"ok": False, "error": "Gaming PC の agent が見つかりません"}
+        try:
+            res = http_post(dev["agent"].rstrip("/") + "/api/sleep")
+        except Exception as e:
+            return {"ok": False, "error": f"agent に接続できません ({type(e).__name__})"}
+        if not res.get("ok"):
+            if res.get("status") == 405:
+                return {"ok": False, "error": "agent がスリープを許可していません (--allow-sleep を付けて起動してください)"}
+            return {"ok": False, "error": res.get("error") or "スリープできませんでした"}
+        self.sleep_sent_at = time.time()
+        return {"ok": True}
 
     def wake(self, cfg: dict) -> dict:
         if time.time() - self.wol_sent_at < 10:
@@ -449,6 +488,7 @@ def demo_state() -> dict:
                        ("nomic-embed-text:latest", 0.27, "137M", "F16")]]},
         "gaming": {"name": "Gaming PC", "host": "192.168.1.30", "device_id": "gaming", "online": gaming_on, "via": "agent" if gaming_on else None,
                    "wol": True, "since": now - (now % 30), "waking": False, "wol_sent_at": None,
+                   "can_sleep": gaming_on, "sleeping": False,
                    "system": devices[2].get("snapshot", {}).get("system")},
         "links": [
             {"name": "Open WebUI", "url": "http://macmini.local:3000", "icon": "openwebui", "up": True, "latency_ms": 12.4},
@@ -523,6 +563,7 @@ class Hub:
         f_oll = self.pool.submit(collect_ollama, self.cfg.get("ollama"))
         f_links = self.pool.submit(collect_links, self.cfg.get("links", []))
         devices = [f.result() for f in f_devs]
+        self.current_devs = devs
         self.current_gaming = self.gaming_cfg(devs)
         gaming = self.gaming.status(self.current_gaming, devices)
         st = {"demo": False, "time": time.time(), "devices": devices, "mac": f_mac.result(),
@@ -627,6 +668,15 @@ def make_handler(hub: Hub):
                 res = hub.gaming.wake(g)
                 threading.Thread(target=hub.poll_once, daemon=True).start()
                 return self._json(200 if res["ok"] else 429, res)
+            if self.path == "/api/sleep":
+                if hub.demo:
+                    return self._json(200, {"ok": True, "demo": True})
+                g = getattr(hub, "current_gaming", None)
+                if not g:
+                    return self._json(400, {"ok": False, "error": "Gaming PC が見つかりません"})
+                res = hub.gaming.sleep(g, getattr(hub, "current_devs", []))
+                threading.Thread(target=hub.poll_once, daemon=True).start()
+                return self._json(200 if res["ok"] else 409, res)
             if self.path.startswith("/api/push/"):
                 n = hub.notifier
                 if not n.enabled:
