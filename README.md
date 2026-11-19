@@ -6,12 +6,12 @@ LAN 内専用の開発ダッシュボードです。1 画面で次のものを�
 - **banto ボード**: デバイスごと・リポジトリごとに、着手中のカードを表示します。未着手・保留・完了は件数とタイトルだけを出します
 - **Launch**: Open WebUI などのリンクと、それぞれの死活・応答時間
 - **Gaming PC**: オンラインかどうか、Wake-on-LAN とスリープのボタン、GPU 使用率・VRAM・温度 (agent を入れた場合)
-- **Mac mini**: チップ、CPU・GPU・メモリ使用率、メモリプレッシャー、ディスク、熱による制限
+- **Mac mini**: チップ、CPU・GPU・メモリ使用率、メモリプレッシャー、ディスク、熱による制限、画面ロックのボタン
 - **Ollama**: ロード中のモデル (VRAM の量、アンロードまでの残り時間、コンテキスト長) とインストール済みのモデル
 
 ![desktop](docs/desktop.png)
 
-スマホでは下のタブ (AI承認待ち / タスクボード / マシン / LLM) で切り替えます。Safari の「ホーム画面に追加」でアプリのように開けます。
+スマホでは下のタブ (AI承認待ち / タスクボード / マシン / LLM) で切り替えます。Launch のリンクは LLM のタブに出ます。マシンのタブはスクロールせずに見られるよう、Mac mini の Load などを省いて詰めています。Safari の「ホーム画面に追加」でアプリのように開けます。
 
 ![mobile](docs/mobile.png)
 
@@ -119,6 +119,14 @@ Gaming PC が起動中で、agent を `--allow-sleep` 付きで動かしてい�
 - スリープからの WoL には、NIC の電源の管理で「このデバイスで、コンピューターのスタンバイ状態を解除できるようにする」と「Magic Packet でのみ…」を有効にしておきます
 - agent は LAN 内からの、独自ヘッダー `X-Dashboard: 1` 付きのリクエストだけを受け付けます (ブラウザが他のサイトから送ろうとしても、プリフライトで止まります)。LAN 内の機器なら誰でも送れるので、それが困る環境では `--allow-sleep` を付けないでください
 
+## 画面ロック
+
+Mac mini パネルの鍵のボタンで、hub が動いている Mac の画面をロックします (確認のモーダルで「ロックする」を押したときだけ)。
+
+- Ctrl+Cmd+Q と同じロックです (`login.framework` の `SACLockScreenImmediate`)。アプリや hub は動いたままです
+- それが使えないときは、`pmset displaysleepnow` で画面をスリープさせます。「スリープ後すぐにパスワードを要求」にしていれば、これでもロックされます
+- hub がログイン中のユーザーとして動いている必要があります (launchd の LaunchAgent はそうなります)
+
 ## スマホに通知を送る
 
 ホーム画面に追加した番頭台へ、Web Push で通知を送ります。通知する出来事は次のとおりです。
@@ -175,6 +183,7 @@ Gaming PC が起動中で、agent を `--allow-sleep` 付きで動かしてい�
 | --- | --- |
 | `GET hub:/api/state` | 画面が使う全データ |
 | `POST hub:/api/wol` | WoL を送る (ヘッダー `X-Dashboard: 1` が必須) |
+| `POST hub:/api/lock` | hub の Mac の画面をロックする (ヘッダー `X-Dashboard: 1` が必須) |
 | `POST hub:/api/sleep` | Gaming PC の agent にスリープを中継する (ヘッダー `X-Dashboard: 1` が必須) |
 | `GET agent:/api/snapshot` | そのデバイスの banto とシステムの情報 |
 | `GET agent:/api/health` | 死活確認 |

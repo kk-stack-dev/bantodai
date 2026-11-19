@@ -160,6 +160,9 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;padding:16p
 
 /* ---------- machines ---------- */
 .mach-h{display:flex;align-items:center;gap:10px}
+.mach-h > div:first-child{flex:1;min-width:0}
+/* Gaming PC のスリープ/WoL と Mac mini の画面ロックを同じ大きさにそろえる */
+#wolBtn,#lockBtn{min-width:118px;justify-content:center;flex:none}
 .mach-h .big{font-size:15px;font-weight:700}
 .mach-h .sub{font:11px var(--mono);color:var(--tx3)}
 .power{display:flex;align-items:center;gap:14px;margin-top:12px}
@@ -227,6 +230,18 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:16px;padding:16p
   .lanes{flex-direction:column}
   .lane span{white-space:normal}
   .gauge svg{max-width:68px}
+  /* マシンタブはスクロールせずに見られるよう詰める */
+  body[data-tab="machines"] main > .col > .panel{margin-bottom:10px}
+  body[data-tab="machines"] .ph{padding:8px 12px}
+  body[data-tab="machines"] .pb{padding:10px 12px}
+  body[data-tab="machines"] .power{margin-top:0}
+  body[data-tab="machines"] .gauges{margin-top:8px}
+  body[data-tab="machines"] .gauge svg{max-width:60px}
+  body[data-tab="machines"] .kv{margin-top:8px;gap:2px 12px}
+  body[data-tab="machines"] .btn{min-height:40px;padding:8px 14px}
+  .bars2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .bars2 .hbar{margin-top:8px}
+  .mac-extra{display:none}
 }
 footer{max-width:1680px;margin:0 auto;padding:0 20px 24px;display:flex;gap:14px;flex-wrap:wrap;color:var(--tx3);font:11px var(--mono)}
 footer .d{display:flex;align-items:center;gap:6px}
@@ -277,7 +292,7 @@ footer .d{display:flex;align-items:center;gap:6px}
   </div>
 
   <div class="col">
-    <section class="panel" data-tab="attn machines">
+    <section class="panel" data-tab="llm">
       <div class="ph"><h2>Launch</h2></div>
       <div class="pb"><div class="launch" id="links"></div></div>
     </section>
@@ -477,14 +492,21 @@ function renderGaming(st) {
   if (b) b.onclick = () => powerConfirm(b.dataset.mode);
 }
 // Wake on LAN とスリープは、誤操作を防ぐため確認のモーダルを出してから送る
+// Wake on LAN・スリープ・画面ロックは、誤操作を防ぐため確認のモーダルを出してから送る
+const POWER = {
+  wake: { url: "/api/wol", ok: "起動する", title: (g) => `${g} を起動しますか？`,
+          text: "Wake on LAN のマジックパケットを送ります。起動まで 1 分ほどかかります。" },
+  sleep: { url: "/api/sleep", ok: "スリープする", title: (g) => `${g} をスリープしますか？`,
+           text: "保存していない作業やゲームがあれば先に閉じてください。起こすときは Wake on LAN を使います。" },
+  lock: { url: "/api/lock", ok: "ロックする", title: () => `${state?.mac ? "Mac mini" : "hub の Mac"} の画面をロックしますか？`,
+          text: "アプリや hub は動いたままです。解除するには、Mac mini でパスワード (または Touch ID) が必要です。" },
+};
 function powerConfirm(mode) {
-  if (mode !== "wake" && mode !== "sleep") return;
-  const name = state?.gaming?.name || "Gaming PC";
-  $("pwrTitle").textContent = mode === "sleep" ? `${name} をスリープしますか？` : `${name} を起動しますか？`;
-  $("pwrText").textContent = mode === "sleep"
-    ? "保存していない作業やゲームがあれば先に閉じてください。起こすときは Wake on LAN を使います。"
-    : "Wake on LAN のマジックパケットを送ります。起動まで 1 分ほどかかります。";
-  $("pwrOk").textContent = mode === "sleep" ? "スリープする" : "起動する";
+  const p = POWER[mode];
+  if (!p) return;
+  $("pwrTitle").textContent = p.title(state?.gaming?.name || "Gaming PC");
+  $("pwrText").textContent = p.text;
+  $("pwrOk").textContent = p.ok;
   $("pwrOk").onclick = () => { $("pwr").close(); powerAction(mode); };
   $("pwr").showModal();
 }
@@ -492,7 +514,7 @@ $("pwrCancel").onclick = () => $("pwr").close();
 $("pwr").addEventListener("click", (e) => { if (e.target === $("pwr")) $("pwr").close(); });
 async function powerAction(mode) {
   try {
-    const r = await fetch(mode === "sleep" ? "/api/sleep" : "/api/wol", { method: "POST", headers: { "X-Dashboard": "1" } });
+    const r = await fetch(POWER[mode].url, { method: "POST", headers: { "X-Dashboard": "1" } });
     const j = await r.json();
     if (!j.ok) alert(j.error || "送信できませんでした");
   } catch (e) { alert("送信できませんでした"); }
@@ -507,13 +529,18 @@ function renderMac(st) {
   const memPct = m.mem_total ? m.mem_used / m.mem_total * 100 : null;
   $("mac").innerHTML = `
     <div class="mach-h"><div><div class="big">${esc(m.chip || "Mac")}</div>
-      <div class="sub">${esc(m.model || "")} · macOS ${esc(m.os || "")} · ${m.cores ? `${m.cores.perf}P+${m.cores.eff}E` : ""} · ${fmtGB(m.mem_total)}</div></div></div>
+      <div class="sub">${esc(m.model || "")} · macOS ${esc(m.os || "")} · ${m.cores ? `${m.cores.perf}P+${m.cores.eff}E` : ""} · ${fmtGB(m.mem_total)}</div></div>
+      <button class="btn" id="lockBtn" type="button">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>画面ロック</button></div>
     <div class="gauges">${gauge(m.cpu, "CPU", "var(--run)")}${gauge(m.gpu, "GPU", "#a78bfa")}${gauge(memPct, "MEM", "var(--amber)")}${gauge(m.mem_pressure, "PRESS", "var(--done)")}</div>
-    <div class="hbar"><div class="lbl"><span>Memory</span><span>${fmtGB(m.mem_used)} / ${fmtGB(m.mem_total)}</span></div><div class="bar"><i style="width:${memPct || 0}%"></i></div></div>
-    ${m.disk ? `<div class="hbar"><div class="lbl"><span>Disk</span><span>${fmtGB(m.disk.used)} / ${fmtGB(m.disk.total)}</span></div><div class="bar"><i style="width:${m.disk.used / m.disk.total * 100}%"></i></div></div>` : ""}
-    <dl class="kv"><dt>Load</dt><dd>${m.load ? m.load.map(x => x.toFixed(2)).join("  ") : "—"}</dd>
-      <dt>GPU mem (wired)</dt><dd>${m.gpu_mem ? fmtGB(m.gpu_mem) : "—"}</dd>
-      ${m.cpu_speed_limit != null && m.cpu_speed_limit < 100 ? `<dt>Thermal</dt><dd style="color:var(--wait)">CPU ${m.cpu_speed_limit}% に制限中</dd>` : ""}</dl>`;
+    <div class="bars2">
+      <div class="hbar"><div class="lbl"><span>Memory</span><span>${fmtGB(m.mem_used)} / ${fmtGB(m.mem_total)}</span></div><div class="bar"><i style="width:${memPct || 0}%"></i></div></div>
+      ${m.disk ? `<div class="hbar"><div class="lbl"><span>Disk</span><span>${fmtGB(m.disk.used)} / ${fmtGB(m.disk.total)}</span></div><div class="bar"><i style="width:${m.disk.used / m.disk.total * 100}%"></i></div></div>` : ""}
+    </div>
+    <dl class="kv mac-extra"><dt>Load</dt><dd>${m.load ? m.load.map(x => x.toFixed(2)).join("  ") : "—"}</dd>
+      <dt>GPU mem (wired)</dt><dd>${m.gpu_mem ? fmtGB(m.gpu_mem) : "—"}</dd></dl>
+    ${m.cpu_speed_limit != null && m.cpu_speed_limit < 100 ? `<dl class="kv"><dt>Thermal</dt><dd style="color:var(--wait)">CPU ${m.cpu_speed_limit}% に制限中</dd></dl>` : ""}`;
+  $("lockBtn").onclick = () => powerConfirm("lock");
 }
 
 // ---------- ollama ----------

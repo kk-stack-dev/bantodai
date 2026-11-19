@@ -402,6 +402,33 @@ class Gaming:
         return {"ok": True}
 
 
+_lock_at = 0.0
+
+
+def lock_screen() -> dict:
+    """hub が動いている Mac の画面をロックする (macOS のみ)。
+    login.framework の SACLockScreenImmediate を使う (Ctrl+Cmd+Q と同じ。アクセシビリティの許可は要らない)。
+    使えないときは画面をスリープさせる (「スリープ後すぐにパスワードを要求」なら、これでもロックされる)"""
+    global _lock_at
+    if sys.platform != "darwin":
+        return {"ok": False, "error": "画面ロックは macOS の hub だけで使えます"}
+    if time.time() - _lock_at < 5:
+        return {"ok": False, "error": "送信したばかりです"}
+    _lock_at = time.time()
+    try:
+        import ctypes
+        lib = ctypes.CDLL("/System/Library/PrivateFrameworks/login.framework/Versions/Current/login")
+        lib.SACLockScreenImmediate.restype = ctypes.c_int
+        if lib.SACLockScreenImmediate() == 0:
+            return {"ok": True, "via": "lock"}
+    except Exception as e:
+        print(f"lock: SACLockScreenImmediate: {type(e).__name__}: {e}", file=sys.stderr)
+    r = subprocess.run(["pmset", "displaysleepnow"], capture_output=True, timeout=5)
+    if r.returncode == 0:
+        return {"ok": True, "via": "displaysleep"}
+    return {"ok": False, "error": "画面をロックできませんでした"}
+
+
 def collect_links(links: list[dict]) -> list[dict]:
     out = []
     for l in links:
@@ -668,6 +695,11 @@ def make_handler(hub: Hub):
                 res = hub.gaming.wake(g)
                 threading.Thread(target=hub.poll_once, daemon=True).start()
                 return self._json(200 if res["ok"] else 429, res)
+            if self.path == "/api/lock":
+                if hub.demo:
+                    return self._json(200, {"ok": True, "demo": True})
+                res = lock_screen()
+                return self._json(200 if res["ok"] else 409, res)
             if self.path == "/api/sleep":
                 if hub.demo:
                     return self._json(200, {"ok": True, "demo": True})
