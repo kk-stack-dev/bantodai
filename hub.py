@@ -30,6 +30,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import agent  # 同じフォルダの agent.py (自機の banto 収集に使う)
+import notify  # Web Push 通知 (pywebpush が無ければ通知だけ無効)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
@@ -49,6 +50,8 @@ DEFAULT_CONFIG = {
         {"name": "Open WebUI", "url": "http://{host}:3000", "health": "http://127.0.0.1:3000/health", "icon": "openwebui"},
         {"name": "Ollama API", "url": "http://{host}:11434", "health": "http://127.0.0.1:11434/api/version", "icon": "ollama"},
     ],
+    # スマホへの Web Push 通知。項目は notify.py の DEFAULT_NOTIFY を参照
+    "notify": {},
 }
 
 
@@ -466,6 +469,7 @@ class Hub:
         self.lock = threading.Lock()
         self.pool = cf.ThreadPoolExecutor(max_workers=8)
         self.discovery = None
+        self.notifier = notify.Notifier(cfg.get("notify"), HERE)
         if not demo and cfg.get("discovery", {}).get("enabled", True):
             self.discovery = Discovery(cfg.get("discovery", {}))
             self.discovery.start()
@@ -525,6 +529,7 @@ class Hub:
               "ollama": f_oll.result(), "gaming": gaming, "links": f_links.result()}
         with self.lock:
             self.state = st
+        self.notifier.on_state(st)
 
     def loop(self):
         while True:
@@ -567,6 +572,19 @@ def make_handler(hub: Hub):
             path = self.path.split("?")[0]
             if path == "/api/state":
                 return self._json(200, hub.get())
+            if path == "/api/push/key":
+                n = hub.notifier
+                return self._json(200, {"enabled": n.enabled, "publicKey": n.public_key, "subscribers": n.count()})
+            if path == "/sw.js":  # Service Worker はルートから配信しないとスコープが / にならない
+                with open(os.path.join(STATIC, "sw.js"), "rb") as f:
+                    raw = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/javascript; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
             if path in ("/", "/index.html"):
                 with open(os.path.join(STATIC, "index.html"), "rb") as f:
                     raw = f.read()
@@ -609,7 +627,35 @@ def make_handler(hub: Hub):
                 res = hub.gaming.wake(g)
                 threading.Thread(target=hub.poll_once, daemon=True).start()
                 return self._json(200 if res["ok"] else 429, res)
+            if self.path.startswith("/api/push/"):
+                n = hub.notifier
+                if not n.enabled:
+                    return self._json(503, {"ok": False, "error": "通知は無効です (hub に pywebpush を入れてください)"})
+                body = self._body()
+                if body is None:
+                    return self._json(400, {"ok": False, "error": "bad json"})
+                sub = body.get("subscription") or {}
+                if self.path == "/api/push/subscribe":
+                    ok = n.subscribe(sub, self.headers.get("User-Agent", ""))
+                    return self._json(200 if ok else 400, {"ok": ok})
+                if self.path == "/api/push/unsubscribe":
+                    n.unsubscribe(str(sub.get("endpoint", "")))
+                    return self._json(200, {"ok": True})
+                if self.path == "/api/push/test":
+                    res = n.send({"title": "番頭台", "body": "テスト通知です。これが見えていれば設定は完了です", "tag": "test"},
+                                 only=str(sub.get("endpoint", "")) or None)
+                    return self._json(200, {"ok": res["sent"] > 0, **res})
             self._json(404, {"error": "not found"})
+
+        def _body(self) -> dict | None:
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                if n > 64 * 1024:
+                    return None
+                data = json.loads(self.rfile.read(n) or b"{}")
+                return data if isinstance(data, dict) else None
+            except ValueError:
+                return None
 
     return H
 

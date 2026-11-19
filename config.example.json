@@ -19,6 +19,10 @@
       "icon": "ollama"
     }
   ],
+  "_notify_comment": "スマホへの通知 (README の「スマホに通知を送る」)。止めたい出来事だけ false にする",
+  "notify": {
+    "events": {"ai_done": true, "attention": true, "gaming_up": true, "link": true, "mac_load": true}
+  },
   "_devices_comment": "自動検出が届かないデバイスだけ足す。例: {\"id\": \"kk-mbp\", \"name\": \"MacBook Pro\", \"agent\": \"http://kk-mbp.local:8765\"}",
   "devices": []
 }

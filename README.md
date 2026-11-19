@@ -15,7 +15,7 @@ LAN 内専用の開発ダッシュボードです。1 画面で次のものを�
 
 ![mobile](docs/mobile.png)
 
-依存パッケージはありません。Python 3.9 以降の標準ライブラリだけで動きます。
+agent は依存パッケージなしで、Python 3.9 以降の標準ライブラリだけで動きます。hub も同じですが、スマホへの通知を使うときだけ `pywebpush` が要ります ([スマホに通知を送る](#スマホに通知を送る))。
 
 ## 構成
 
@@ -47,9 +47,16 @@ python3 hub.py --demo
 python3 hub.py        # config.json は無くても動く
 ```
 
+スマホへの通知も使うときは、venv に `pywebpush` を入れてその Python で起動します。
+
+```sh
+uv venv .venv && VIRTUAL_ENV=.venv uv pip install -r requirements-hub.txt   # uv が無ければ python3 -m venv .venv && .venv/bin/pip install -r requirements-hub.txt
+.venv/bin/python hub.py
+```
+
 Open WebUI (`:3000`) と Ollama API (`:11434`) のリンクは最初から入っています。リンクの `{host}` は、ブラウザで開いているダッシュボードのホスト名に置き換わるので、IP を書く必要はありません。変えたい項目だけ `config.json` に書きます (`config.example.json` を参照)。
 
-ログイン時に自動で起動するには `launchd/dev.kkstack.dashboard.hub.plist` の `__DIR__` を置き換えて `~/Library/LaunchAgents/` に置き、`launchctl load` します。
+ログイン時に自動で起動するには `launchd/dev.kkstack.dashboard.hub.plist` の `__DIR__` を置き換えて `~/Library/LaunchAgents/` に置き、`launchctl load` します。この plist は `.venv/bin/python` で起動するので、先に上の venv を作っておきます。
 
 **MacBook など**
 
@@ -96,6 +103,49 @@ python3 agent.py --no-beacon  # 自動検出用のブロードキャストを止
 - 送信後、最大 3 分は `WAKING…` と表示します
 - 他のサイトから勝手に送られないよう、`/api/wol` は独自ヘッダー `X-Dashboard: 1` が無いリクエストを拒否します
 - ゲーミング PC 側では、BIOS/UEFI の WoL と、NIC の詳細設定の「Magic Packet で起動」を有効にしておきます
+
+## スマホに通知を送る
+
+ホーム画面に追加した番頭台へ、Web Push で通知を送ります。通知する出来事は次のとおりです。
+
+| 出来事 | `notify.events` のキー |
+| --- | --- |
+| AI の処理が終わった・失敗した (セッションが RUN/WAIT から IDLE/DONE/FAIL に変わった) | `ai_done` |
+| 承認待ち (WAIT) になった・タスクが確認待ち (IN_REVIEW) になった | `attention` |
+| Gaming PC が起動した | `gaming_up` |
+| Launch のリンクが 2 回続けて応答しなかった・戻った | `link` |
+| Mac mini のメモリプレッシャーが 85% 以上・熱で CPU が制限された (30 分に 1 回まで) | `mac_load` |
+
+ボードを開いていないプロジェクトは数えません (nvim を閉じただけで「終わった」と鳴らさないため)。一度に 5 件以上起きたときは 1 件にまとめます。
+
+**1. hub に pywebpush を入れる** — 上の「Mac mini (hub)」の venv の手順です。初回起動時に VAPID 鍵 `vapid_private.pem` ができます。購読先は `push_subscriptions.json` に保存します (どちらも git には入りません。鍵を作り直すと、スマホ側でオンにし直す必要があります)。
+
+**2. HTTPS で開けるようにする** — iPhone は `http://` のページに通知を許可しません。Tailscale を使うのがいちばん簡単です。
+
+1. Tailscale の管理画面の DNS で MagicDNS と「HTTPS Certificates」を有効にします
+2. Mac mini で次を実行します (Mac App Store 版は `/Applications/Tailscale.app/Contents/MacOS/Tailscale` を `tailscale` の代わりに使います)
+
+   ```sh
+   tailscale serve --bg 8080
+   ```
+
+3. iPhone に Tailscale アプリを入れて同じアカウントでログインし、表示された `https://<Mac mini の名前>.<tailnet>.ts.net/` を Safari で開きます
+
+`tailscale serve` は 127.0.0.1 から hub に中継するので、hub の LAN 限定のチェックはそのまま通ります。tailnet の外からは見えません。
+
+**3. iPhone で通知をオンにする** — Safari の共有ボタンから「ホーム画面に追加」し (iOS 16.4 以降)、ホーム画面のアイコンから開きます。右上のベルを押して「通知をオンにする」を押し、許可します。テスト通知が届けば完了です。通知を押すと、関係するタブが開きます。
+
+設定は `config.json` の `notify` で変えられます。
+
+```json
+"notify": {
+  "events": {"mac_load": false},
+  "mem_pressure": 90,
+  "contact": "mailto:you@example.com"
+}
+```
+
+`contact` は Push サービス (Apple など) に伝える連絡先です。`mailto:` か、パスの無い `https://ホスト名` だけが使えます。
 
 ## banto の状態について
 

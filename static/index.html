@@ -48,6 +48,21 @@ header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:18px;
 .kpi.hot{border-color:#fb923c66;background:#2a1708}
 .kpi.hot .n{color:var(--wait)}
 .clock{text-align:right}
+.hr{display:flex;align-items:center;gap:12px}
+.bell{appearance:none;width:34px;height:34px;border-radius:9px;border:1px solid var(--line);background:var(--panel);color:var(--tx3);
+  display:grid;place-items:center;cursor:pointer;padding:0}
+.bell svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.bell.on{color:var(--amber);border-color:#f5a52466;background:var(--amber-d)}
+.bell .slash{display:inherit} .bell.on .slash{display:none}
+dialog.ntf{background:var(--panel);color:var(--tx);border:1px solid var(--line);border-radius:14px;padding:18px;width:min(380px,calc(100vw - 32px))}
+dialog.ntf::backdrop{background:#000a}
+dialog.ntf h3{margin:0 0 8px;font-size:15px}
+dialog.ntf p{margin:0 0 10px;color:var(--tx2);font-size:13px;line-height:1.6}
+dialog.ntf ul{margin:0 0 14px;padding-left:18px;color:var(--tx2);font-size:12px;line-height:1.7}
+dialog.ntf .btns{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
+dialog.ntf button{appearance:none;border:1px solid var(--line);background:none;color:var(--tx);border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer}
+dialog.ntf button.pri{background:var(--amber);border-color:var(--amber);color:#1b1205;font-weight:700}
+dialog.ntf .msg{min-height:1em;color:var(--amber);font-size:12px}
 .clock .t{font:600 18px var(--mono);letter-spacing:.04em}
 .clock .u{font:10px var(--mono);color:var(--tx3)}
 .badge-demo{font:600 10px var(--mono);color:#1b1205;background:var(--amber);padding:2px 6px;border-radius:4px;margin-left:6px}
@@ -226,8 +241,24 @@ footer .d{display:flex;align-items:center;gap:6px}
     <div><b>番頭台</b><small>DEV CONSOLE · LAN</small></div>
   </div>
   <div class="kpis" id="kpis"></div>
-  <div class="clock" id="clock"><div class="t mono">--:--:--</div><div class="u">接続中…</div></div>
+  <div class="hr">
+    <button class="bell" id="bell" type="button" title="通知" aria-label="通知の設定"><svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0-6 6v4l-2 3h16l-2-3V9a6 6 0 0 0-6-6zM10 19a2 2 0 0 0 4 0"/><path class="slash" d="M4 4l16 16"/></svg></button>
+    <div class="clock" id="clock"><div class="t mono">--:--:--</div><div class="u">接続中…</div></div>
+  </div>
 </header>
+<dialog class="ntf" id="ntf">
+  <h3>スマホに通知</h3>
+  <p id="ntfText"></p>
+  <ul>
+    <li>AI の処理が終わったとき・失敗したとき</li>
+    <li>承認待ち・確認待ちが増えたとき</li>
+    <li>Gaming PC が起動したとき</li>
+    <li>Launch のリンクが落ちたとき・戻ったとき</li>
+    <li>Mac mini のメモリプレッシャーが高いとき・熱で制限されたとき</li>
+  </ul>
+  <p class="msg" id="ntfMsg"></p>
+  <div class="btns" id="ntfBtns"></div>
+</dialog>
 
 <main>
   <div class="col">
@@ -497,7 +528,8 @@ function setTab(t) {
   window.scrollTo({ top: 0 });
 }
 document.querySelectorAll(".tabbar button").forEach(b => b.onclick = () => setTab(b.dataset.go));
-setTab((() => { try { return localStorage.getItem("tab"); } catch (e) { return null; } })() || "attn");
+setTab(new URLSearchParams(location.search).get("tab") || (() => { try { return localStorage.getItem("tab"); } catch (e) { return null; } })() || "attn");
+if (location.search) history.replaceState(null, "", location.pathname);
 function badge(id, n) { const e = $(id); e.textContent = n; e.classList.toggle("show", n > 0); }
 
 function render() {
@@ -528,6 +560,90 @@ async function refresh() {
   } catch (e) { /* 次回に再試行 */ }
   tick();
 }
+// ---------- notifications (Web Push) ----------
+const NT = { key: null, sub: null };
+const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const hasNotif = () => typeof Notification !== "undefined";
+function b64uToBytes(s) {
+  s = s.replace(/-/g, "+").replace(/_/g, "/"); s += "===".slice((s.length + 3) % 4);
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+}
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Dashboard": "1" }, body: JSON.stringify(body) });
+  return r.json().catch(() => ({ ok: false }));
+}
+function ntBlocked() {
+  if (!window.isSecureContext) return "通知は https:// で開いたときだけ使えます。README の「スマホに通知を送る」の手順で用意した https:// のアドレスから開いてください。";
+  if (isIOS && !standalone) return "iPhone では、Safari の共有ボタンから「ホーム画面に追加」して、ホーム画面のアイコンから開いたときだけ通知を使えます。";
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !hasNotif()) return "このブラウザは Web Push に対応していません。";
+  if (!NT.key) return "hub に接続できません。";
+  if (!NT.key.enabled) return "hub 側で通知が無効です (hub に pywebpush が入っていません)。";
+  return null;
+}
+const ntOn = () => !!NT.sub && hasNotif() && Notification.permission === "granted";
+function ntRender() {
+  const on = ntOn();
+  $("bell").classList.toggle("on", on);
+  $("bell").title = on ? "通知: オン" : "通知: オフ";
+}
+async function ntInit() {
+  try { NT.key = await (await fetch("/api/push/key", { cache: "no-store" })).json(); } catch (e) {}
+  if (window.isSecureContext && "serviceWorker" in navigator) {
+    try {
+      const reg = await navigator.serviceWorker.register("/sw.js");
+      NT.sub = reg.pushManager ? await reg.pushManager.getSubscription() : null;
+      // hub 側の購読一覧が消えていても戻るように、開くたびに登録し直す (同じ endpoint は上書き)
+      if (NT.sub && NT.key?.enabled && ntOn()) post("/api/push/subscribe", { subscription: NT.sub.toJSON() });
+    } catch (e) {}
+  }
+  ntRender();
+}
+function ntDialog(msg = "") {
+  const blocked = ntBlocked(), btns = [];
+  let text;
+  if (blocked) text = blocked;
+  else if (Notification.permission === "denied") text = "通知が拒否されています。iPhone なら設定アプリの「通知」→「番頭台」で許可してから、もう一度開いてください。";
+  else if (ntOn()) { text = "この端末で通知がオンになっています。"; btns.push(["テスト通知を送る", ntTest, true], ["通知をオフにする", ntOff]); }
+  else { text = "この端末で、次のときに通知を受け取ります。"; btns.push(["通知をオンにする", ntSubscribe, true]); }
+  btns.push(["閉じる", () => $("ntf").close()]);
+  $("ntfText").textContent = text;
+  $("ntfMsg").textContent = msg;
+  $("ntfBtns").replaceChildren(...btns.map(([label, fn, pri]) => {
+    const b = document.createElement("button"); b.type = "button"; b.textContent = label; if (pri) b.className = "pri";
+    b.onclick = async () => { b.disabled = true; try { await fn(); } catch (e) { ntDialog("失敗しました: " + (e.message || e)); } finally { b.disabled = false; } };
+    return b;
+  }));
+  if (!$("ntf").open) $("ntf").showModal();
+}
+async function ntSubscribe() {
+  // iOS はタップの直後でないと許可を求められないので、最初に呼ぶ
+  const perm = await Notification.requestPermission();
+  if (perm !== "granted") return ntDialog("通知が許可されませんでした。");
+  const reg = await navigator.serviceWorker.ready;
+  const old = await reg.pushManager.getSubscription();
+  if (old) await old.unsubscribe(); // hub の鍵が変わっていても作り直せるように
+  NT.sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(NT.key.publicKey) });
+  const r = await post("/api/push/subscribe", { subscription: NT.sub.toJSON() });
+  ntRender();
+  if (!r.ok) return ntDialog("hub に登録できませんでした: " + (r.error || ""));
+  const t = await post("/api/push/test", { subscription: { endpoint: NT.sub.endpoint } });
+  ntDialog(t.ok ? "オンにしました。テスト通知を送りました。" : "オンにしましたが、テスト通知を送れませんでした。hub のログを見てください。");
+}
+async function ntTest() {
+  const t = await post("/api/push/test", { subscription: { endpoint: NT.sub.endpoint } });
+  ntDialog(t.ok ? "テスト通知を送りました。" : "送れませんでした。もう一度オンにし直してください。");
+}
+async function ntOff() {
+  const ep = NT.sub?.endpoint;
+  try { await NT.sub?.unsubscribe(); } catch (e) {}
+  if (ep) await post("/api/push/unsubscribe", { subscription: { endpoint: ep } });
+  NT.sub = null; ntRender(); ntDialog("オフにしました。");
+}
+$("bell").onclick = () => ntDialog();
+$("ntf").addEventListener("click", (e) => { if (e.target === $("ntf")) $("ntf").close(); });
+ntInit();
+
 refresh();
 setInterval(refresh, 5000);
 setInterval(tick, 1000);

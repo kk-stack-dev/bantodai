@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Mac mini でログイン時にハブを起動する。__DIR__ を dev-dashboard の絶対パスに置き換えて
-     ~/Library/LaunchAgents/ に置き、launchctl load ~/Library/LaunchAgents/dev.kkstack.dashboard.hub.plist -->
+     ~/Library/LaunchAgents/ に置き、launchctl load ~/Library/LaunchAgents/dev.kkstack.dashboard.hub.plist
+     通知に使う pywebpush を入れた venv (README の「Mac mini (hub)」) の Python で起動する -->
 <plist version="1.0">
 <dict>
   <key>Label</key><string>dev.kkstack.dashboard.hub</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/python3</string>
+    <string>__DIR__/.venv/bin/python</string>
     <string>__DIR__/hub.py</string>
   </array>
   <key>WorkingDirectory</key><string>__DIR__</string>
