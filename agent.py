@@ -186,10 +186,165 @@ def _run(cmd: list[str], timeout: float = 3) -> str:
         return ""
 
 
+class _WinGpu:
+    """Windows の GPU 情報を標準 API だけで取る (AMD / Intel など nvidia-smi が無い GPU 向け)
+
+    - アダプタ名・VRAM 総量: DXGI (IDXGIFactory1::EnumAdapters1 → GetDesc1)
+    - 使用率: パフォーマンスカウンター「GPU Engine / Utilization Percentage」
+      (タスクマネージャーと同じく、エンジンごとに全プロセスを合計し、その最大値)
+    - VRAM 使用量: 「GPU Adapter Memory / Dedicated Usage」
+    温度と消費電力は標準 API に無いため None を返す。
+    カウンターは 2 回の計測の差で出るので、別スレッドで 5 秒ごとに取って結果を持っておく。
+    """
+
+    def __init__(self, interval: float = 5):
+        self.interval = interval
+        self.result: list[dict] = []
+        self.adapters = self._adapters()
+        if self.adapters:
+            import threading
+            self._update()  # 初回だけ同期で取る (--once でも値が出るように)
+            threading.Thread(target=self._loop, daemon=True).start()
+
+    @staticmethod
+    def _adapters() -> list[dict]:
+        try:
+            import ctypes
+            from ctypes import wintypes as w
+
+            class LUID(ctypes.Structure):
+                _fields_ = [("Low", w.DWORD), ("High", w.LONG)]
+
+            class DESC1(ctypes.Structure):
+                _fields_ = [("Description", w.WCHAR * 128), ("VendorId", w.UINT), ("DeviceId", w.UINT),
+                            ("SubSysId", w.UINT), ("Revision", w.UINT),
+                            ("DedicatedVideoMemory", ctypes.c_size_t), ("DedicatedSystemMemory", ctypes.c_size_t),
+                            ("SharedSystemMemory", ctypes.c_size_t), ("AdapterLuid", LUID), ("Flags", w.UINT)]
+
+            class GUID(ctypes.Structure):
+                _fields_ = [("a", w.DWORD), ("b", w.WORD), ("c", w.WORD), ("d", ctypes.c_ubyte * 8)]
+
+            def vcall(obj, idx, restype, *argtypes):
+                vt = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+                return ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(vt[idx])
+
+            iid = GUID(0x770aae78, 0xf26f, 0x4dba, (ctypes.c_ubyte * 8)(0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87))
+            fac = ctypes.c_void_p()
+            if ctypes.WinDLL("dxgi").CreateDXGIFactory1(ctypes.byref(iid), ctypes.byref(fac)) != 0:
+                return []
+            out = []
+            i = 0
+            while True:
+                ad = ctypes.c_void_p()
+                if vcall(fac, 12, ctypes.c_long, w.UINT, ctypes.POINTER(ctypes.c_void_p))(fac, i, ctypes.byref(ad)) != 0:
+                    break  # DXGI_ERROR_NOT_FOUND
+                d = DESC1()
+                vcall(ad, 10, ctypes.c_long, ctypes.POINTER(DESC1))(ad, ctypes.byref(d))
+                vcall(ad, 2, w.ULONG)(ad)  # Release
+                i += 1
+                if d.Flags & 2:  # DXGI_ADAPTER_FLAG_SOFTWARE (Microsoft Basic Render Driver)
+                    continue
+                out.append({"name": d.Description, "mem_total": d.DedicatedVideoMemory,
+                            "luid": f"0x{d.AdapterLuid.High & 0xffffffff:08x}_0x{d.AdapterLuid.Low:08x}"})
+            vcall(fac, 2, w.ULONG)(fac)
+            # VRAM の多い順 (dGPU を先頭にする。画面は先頭の 1 枚だけを出す)
+            out.sort(key=lambda a: a["mem_total"], reverse=True)
+            return out
+        except Exception:
+            return []
+
+    @staticmethod
+    def _sample() -> tuple[dict, dict]:
+        """(LUID ごとの使用率 %, LUID ごとの VRAM 使用バイト) を返す"""
+        import ctypes
+        from ctypes import wintypes as w
+
+        class FMT(ctypes.Structure):
+            _fields_ = [("CStatus", w.DWORD), ("doubleValue", ctypes.c_double)]
+
+        class ITEM(ctypes.Structure):
+            _fields_ = [("szName", w.LPWSTR), ("FmtValue", FMT)]
+
+        pdh = ctypes.WinDLL("pdh")
+        PDH_FMT_DOUBLE = 0x200
+
+        def items(counter) -> list[tuple[str, float]]:
+            size, n = w.DWORD(0), w.DWORD(0)
+            pdh.PdhGetFormattedCounterArrayW(counter, PDH_FMT_DOUBLE, ctypes.byref(size), ctypes.byref(n), None)
+            if not size.value:
+                return []
+            buf = (ctypes.c_byte * size.value)()
+            if pdh.PdhGetFormattedCounterArrayW(counter, PDH_FMT_DOUBLE, ctypes.byref(size), ctypes.byref(n), buf) != 0:
+                return []
+            arr = ctypes.cast(buf, ctypes.POINTER(ITEM))
+            return [(arr[k].szName, arr[k].FmtValue.doubleValue) for k in range(n.value)]
+
+        # プロセスの増減でインスタンスが変わるので、毎回クエリを作り直す
+        q = ctypes.c_void_p()
+        if pdh.PdhOpenQueryW(None, 0, ctypes.byref(q)) != 0:
+            return {}, {}
+        try:
+            c_eng, c_mem = ctypes.c_void_p(), ctypes.c_void_p()
+            pdh.PdhAddEnglishCounterW(q, "\\GPU Engine(*)\\Utilization Percentage", 0, ctypes.byref(c_eng))
+            pdh.PdhAddEnglishCounterW(q, "\\GPU Adapter Memory(*)\\Dedicated Usage", 0, ctypes.byref(c_mem))
+            pdh.PdhCollectQueryData(q)
+            time.sleep(1)
+            pdh.PdhCollectQueryData(q)
+            # 例: pid_1234_luid_0x00000000_0x37885868_phys_0_eng_0_engtype_3D
+            per_engine: dict[tuple[str, str], float] = {}
+            for name, v in items(c_eng):
+                try:
+                    luid = name.lower().split("luid_")[1].split("_phys")[0]
+                    eng = name.lower().split("_eng_")[1].split("_")[0]
+                except IndexError:
+                    continue
+                per_engine[(luid, eng)] = per_engine.get((luid, eng), 0.0) + v
+            util: dict[str, float] = {}
+            for (luid, _), v in per_engine.items():
+                util[luid] = max(util.get(luid, 0.0), min(v, 100.0))
+            mem = {}
+            for name, v in items(c_mem):
+                try:
+                    mem[name.lower().split("luid_")[1].split("_phys")[0]] = v
+                except IndexError:
+                    continue
+            return util, mem
+        finally:
+            pdh.PdhCloseQuery(q)
+
+    def _update(self):
+        try:
+            util, mem = self._sample()
+            mib = 1024 * 1024
+            self.result = [{
+                "name": a["name"],
+                "util": round(util[a["luid"]], 1) if a["luid"] in util else None,
+                "temp": None,
+                "mem_used": round(mem[a["luid"]] / mib) if a["luid"] in mem else None,
+                "mem_total": round(a["mem_total"] / mib),
+                "power": None,
+            } for a in self.adapters]
+        except Exception:
+            pass
+
+    def _loop(self):
+        while True:
+            time.sleep(max(self.interval - 1, 1))
+            self._update()
+
+
+_win_gpu: _WinGpu | None = None
+
+
 def collect_gpu() -> list[dict]:
-    """NVIDIA GPU があれば nvidia-smi で取る (ゲーミング PC 向け)"""
+    """GPU の情報。NVIDIA は nvidia-smi、それ以外の Windows は DXGI とパフォーマンスカウンターで取る"""
+    global _win_gpu
     if not shutil.which("nvidia-smi"):
-        return []
+        if os.name != "nt":
+            return []
+        if _win_gpu is None:
+            _win_gpu = _WinGpu()
+        return _win_gpu.result
     out = _run(["nvidia-smi", "--query-gpu=name,utilization.gpu,temperature.gpu,memory.used,memory.total,power.draw",
                 "--format=csv,noheader,nounits"])
     gpus = []

@@ -75,7 +75,7 @@ pythonw agent.py --name "Gaming PC" --role gaming
 - `--role gaming` を付けた agent が Gaming PC 欄に入り、WoL の対象になります
 - **最初の 1 回だけ**、PC を起動した状態で agent を動かしてください。そのとき hub が ARP テーブルから実際に通信した NIC の MAC アドレスを覚えます
 - タスクスケジューラの「ログオン時」に登録して常駐させます。Windows ファイアウォールの許可を求められたら「プライベートネットワーク」だけを許可します
-- `nvidia-smi` があれば GPU の情報も返します。WSL の中で banto を使っている場合は、WSL の中でも agent を動かしてください (役割なしで)
+- `nvidia-smi` があれば GPU の情報も返します。無い場合 (AMD・Intel など) は、Windows の DXGI とパフォーマンスカウンターから GPU 使用率と VRAM を返します。温度と消費電力は取れないので「—」になります。WSL の中で banto を使っている場合は、WSL の中でも agent を動かしてください (役割なしで)
 
 **自動検出が届かないとき**
 
